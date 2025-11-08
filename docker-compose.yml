@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: roostoo-trading-bot
+    restart: unless-stopped
+    env_file:
+      - config/.env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+

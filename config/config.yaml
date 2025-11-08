@@ -1,0 +1,60 @@
+roostoo:
+  api_key: ${ROOSTOO_API_KEY}
+  secret_key: ${ROOSTOO_SECRET_KEY}
+  base_url: "https://mock-api.roostoo.com"
+
+horus:
+  enabled: false
+  api_key: ${HORUS_API_KEY}
+
+strategies:
+  ensemble:
+    technical_weight: 0.4
+    llm_weight: 0.3
+    baseline_weight: 0.3
+  
+  technical:
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bb_period: 20
+    bb_std: 2
+  
+  llm:
+    provider: "openai"  # or "anthropic"
+    model: "gpt-4"
+    enabled: true
+    cache_responses: true
+    max_tokens: 200
+    api_key: ${OPENAI_API_KEY}  # or ${ANTHROPIC_API_KEY}
+  
+  baseline:
+    momentum_window: 5
+    mean_reversion_threshold: 0.02
+    momentum_weight: 0.6
+    mean_reversion_weight: 0.4
+
+trading:
+  pairs: ["BTC/USD", "ETH/USD"]  # or "all" for all available pairs
+  order_type: "MARKET"  # or "LIMIT"
+  position_size_pct: 0.1  # 10% of balance per trade
+  max_positions: 3
+  polling_interval: 60  # seconds
+  min_confidence: 0.5  # Minimum signal confidence to execute trade
+  cooldown_period: 300  # seconds between trades for same pair
+  min_order_size: 1.0
+  max_order_size: null  # null for no limit
+
+data:
+  sources: ["roostoo"]  # ["roostoo", "horus", "binance"]
+  storage: "sqlite"
+  data_retention_days: 30
+
+logging:
+  level: "INFO"
+  file: "logs/bot.log"
+  max_size_mb: 100
+
