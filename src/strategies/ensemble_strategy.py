@@ -91,7 +91,10 @@ class EnsembleStrategy(BaseStrategy):
                 hold_score += confidence
             
             total_confidence += confidence
-            signal_metadata[signal.metadata.get('strategy', 'unknown')] = {
+            strategy_name = 'unknown'
+            if signal.metadata:
+                strategy_name = signal.metadata.get('strategy', 'unknown')
+            signal_metadata[strategy_name] = {
                 'action': signal.action,
                 'confidence': signal.confidence,
                 'weight': weight

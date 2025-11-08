@@ -25,6 +25,17 @@ class RiskManager:
         self.min_order_size = config.get('min_order_size', 1.0)
         self.max_order_size = config.get('max_order_size', None)
         
+        # Load pair weights and normalize them
+        pair_weights = config.get('pair_weights', {})
+        if pair_weights:
+            total_weight = sum(pair_weights.values())
+            if total_weight > 0:
+                self.pair_weights = {pair: weight / total_weight for pair, weight in pair_weights.items()}
+            else:
+                self.pair_weights = {}
+        else:
+            self.pair_weights = {}
+        
         # Track positions
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.last_trade_time: Dict[str, float] = {}
@@ -38,7 +49,7 @@ class RiskManager:
         signal_confidence: float
     ) -> float:
         """
-        Calculate position size based on risk parameters.
+        Calculate position size based on risk parameters and pair weights.
         
         Args:
             pair: Trading pair
@@ -52,8 +63,18 @@ class RiskManager:
         # Base position size from balance percentage
         base_size = balance * self.position_size_pct
         
+        # Apply pair weight if configured (normalized weight multiplies the base size)
+        if self.pair_weights and pair in self.pair_weights:
+            pair_weight = self.pair_weights[pair]
+            # Weighted size: if weight is 0.2 (20%), use 0.2 of base_size
+            # If weight is 0.8 (80%), use 0.8 of base_size
+            weighted_size = base_size * pair_weight
+        else:
+            # If no weight configured, use equal allocation
+            weighted_size = base_size
+        
         # Adjust based on confidence
-        adjusted_size = base_size * signal_confidence
+        adjusted_size = weighted_size * signal_confidence
         
         # Convert to quantity
         quantity = adjusted_size / price if price > 0 else 0
