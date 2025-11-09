@@ -6,7 +6,8 @@ A sophisticated crypto trading bot for the Roostoo Labs trading competition, fea
 
 - **Multi-Strategy Ensemble**: Combines technical analysis, LLM insights, and baseline strategies with configurable weights
 - **Technical Analysis**: RSI, MACD, and Bollinger Bands indicators
-- **LLM Integration**: Optional OpenAI/Anthropic API integration for market sentiment analysis
+- **LLM Integration**: Optional OpenRouter (Microsoft MAI DS R1), OpenAI, or Anthropic API integration for market sentiment analysis
+- **Social Sentiment**: Optional X (Twitter) meme-coin sentiment fetcher with configurable rate limits
 - **Risk Management**: Position sizing, cooldown periods, and maximum position limits
 - **Comprehensive Logging**: Structured JSON logging for all trades and API calls
 - **Performance Tracking**: Real-time performance metrics including PnL, win rate, and Sharpe ratio
@@ -38,7 +39,7 @@ QuantComp_RoostooLabs/
 - Python 3.11+
 - Docker (for containerized deployment)
 - Roostoo API credentials (API key and secret key)
-- (Optional) OpenAI or Anthropic API key for LLM strategy
+- (Optional) OpenRouter, OpenAI, or Anthropic API key for LLM strategy
 - (Optional) Horus API key for additional data
 
 ## Setup
@@ -66,6 +67,13 @@ export ROOSTOO_API_KEY="your_roostoo_api_key"
 export ROOSTOO_SECRET_KEY="your_roostoo_secret_key"
 
 # Optional - for LLM strategy
+export OPENROUTER_API_KEY="your_openrouter_api_key"
+# Optional headers required by OpenRouter (set to match your app)
+export OPENROUTER_HTTP_REFERER="https://your-app-url.example"
+export OPENROUTER_X_TITLE="QuantComp Trading Bot"
+# Optional - X (Twitter) social sentiment
+export X_BEARER_TOKEN="your_x_bearer_token"
+# OR
 export OPENAI_API_KEY="your_openai_api_key"
 # OR
 export ANTHROPIC_API_KEY="your_anthropic_api_key"
@@ -283,10 +291,21 @@ sudo journalctl -u trading-bot -f
 - `macd_fast/slow/signal`: MACD periods (default: 12/26/9)
 
 **LLM Strategy**:
-- `provider`: "openai" or "anthropic"
-- `model`: Model name (e.g., "gpt-4", "claude-3-opus-20240229")
+- `provider`: "openrouter", "openai", or "anthropic"
+- `model`: Model name (e.g., "microsoft/mai-ds-r1:free", "gpt-4", "claude-3-opus-20240229")
 - `enabled`: Enable/disable LLM (default: true)
 - `cache_responses`: Cache LLM responses to reduce API costs
+- `base_url`: Override API base for the selected provider (OpenRouter defaults to https://openrouter.ai/api/v1)
+- `default_headers`: Extra request headers (OpenRouter requires `HTTP-Referer` and `X-Title`)
+
+**Social Sentiment (X)**:
+- `enabled`: Enable/disable X sentiment integration (default: false)
+- `bearer_token`: X API v2 bearer token (replace via environment variable)
+- `requests_per_coin_per_day`: Hard cap on API requests per coin per day (default: 2)
+- `cache_ttl_hours`: Cache duration before allowing a refresh (default: 12)
+- `coin_queries`: Map of coin symbols to X search queries (cashtags/hashtags). Default queries cover TRUMP, SOL, ETH, and DOGE.
+- `pair_mapping`: Optional overrides mapping trading pairs to coin query keys
+- `cache_path`: Location for cached sentiment JSON (default: `data/social_cache.json`)
 
 **Baseline Strategy**:
 - `momentum_window`: Window for momentum calculation (default: 5)
@@ -355,7 +374,7 @@ Leverages large language models to analyze market conditions:
 - Analyzes price trends and 24h changes
 - Provides BUY/SELL/HOLD signals with confidence scores
 - Caches responses to minimize API costs
-- Supports OpenAI GPT-4 and Anthropic Claude models
+- Supports OpenRouter (Microsoft MAI DS R1), OpenAI GPT-4, and Anthropic Claude models
 
 ### Baseline Strategy
 

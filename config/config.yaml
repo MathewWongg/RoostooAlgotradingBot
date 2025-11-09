@@ -24,12 +24,16 @@ strategies:
     bb_std: 2
   
   llm:
-    provider: "openai"  # or "anthropic"
-    model: "gpt-4"
-    enabled: false  # Set to false to disable LLM strategy
+    provider: "openrouter"  # or "openai" / "anthropic"
+    model: "microsoft/mai-ds-r1:free"
+    enabled: true  # Set to false to disable LLM strategy
     cache_responses: true
     max_tokens: 200
-    api_key: ${OPENAI_API_KEY}  # or ${ANTHROPIC_API_KEY}
+    api_key: ${OPENROUTER_API_KEY}  # or ${OPENAI_API_KEY} / ${ANTHROPIC_API_KEY}
+    base_url: "https://openrouter.ai/api/v1"
+    default_headers:
+      HTTP-Referer: ${OPENROUTER_HTTP_REFERER}  # Replace with your app URL (required by OpenRouter)
+      X-Title: ${OPENROUTER_X_TITLE}            # Replace with your app name (required by OpenRouter)
   
   baseline:
     momentum_window: 5
@@ -38,10 +42,13 @@ strategies:
     mean_reversion_weight: 0.4
 
 trading:
-  pairs: ["TRUMP/USD", "SOL/USD"]  # or "all" for all available pairs
+  pairs: ["TRUMP/USD", "SHIB/USD", "DOGE/USD", "SOL/USD", "ETH/USD"]  # or "all" for all available pairs
   pair_weights:  # Weighting for position allocation (2:8 ratio)
-    "TRUMP/USD": 2
-    "SOL/USD": 8
+    "TRUMP/USD": 70
+    "SHIB/USD": 60
+    "DOGE/USD": 70
+    "SOL/USD": 400
+    "ETH/USD": 400
   order_type: "MARKET"  # or "LIMIT"
   # Spot-only execution and risk knobs
   spot_only: true
@@ -63,6 +70,27 @@ data:
   sources: ["roostoo"]  # ["roostoo", "horus", "binance"]
   storage: "sqlite"
   data_retention_days: 30
+
+social:
+  x:
+    enabled: true
+    bearer_token: ${X_BEARER_TOKEN}
+    requests_per_coin_per_day: 2  # Limit: 2 API calls per coin per day
+    cache_ttl_hours: 12           # Reuse cached sentiment for 12 hours
+    max_results: 25               # Tweets per fetch (max 100)
+    cache_path: "data/social_cache.json"
+    coin_queries:
+      TRUMP: "(#TrumpCoin OR $TRUMP OR \"Trump\" (\"token\" OR \"coin\")) lang:en -is:retweet"
+      SHIB: "(#ShibaInu OR $SHIB OR #SHIBAINU) lang:en -is:retweet"
+      SOL: "(#Solana OR $SOL) lang:en -is:retweet"
+      ETH: "(#Ethereum OR $ETH) lang:en -is:retweet"
+      DOGE: "(#DogeCoin OR $DOGE) lang:en -is:retweet"
+    pair_mapping:
+      "TRUMP/USD": "TRUMP"
+      "SHIB/USD": "SHIB"
+      "SOL/USD": "SOL"
+      "ETH/USD": "ETH"
+      "DOGE/USD": "DOGE"
 
 backtest:
   enabled: true

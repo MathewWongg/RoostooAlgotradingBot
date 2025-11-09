@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from .api.roostoo_client import RoostooClient
 from .api.horus_client import HorusClient
 from .api.binance_client import BinanceClient
+from .api.x_client import XClient
 from .data.data_collector import DataCollector
 from .data.data_storage import DataStorage
 from .strategies.ensemble_strategy import EnsembleStrategy
@@ -61,12 +62,43 @@ class TradingBot:
             db_path=f"data/{data_config.get('storage', 'sqlite')}.db",
             retention_days=data_config.get('data_retention_days', 30)
         )
-        
+
+        social_config = self.config.get('social', {}).get('x', {})
+        self.x_client = None
+        self.social_mapping = {}
+        if social_config.get('enabled', False):
+            bearer_token = social_config.get('bearer_token')
+            if isinstance(bearer_token, str) and "${" in bearer_token:
+                bearer_token = None
+            coin_queries = social_config.get('coin_queries', {})
+            self.social_mapping = social_config.get('pair_mapping', {})
+
+            if bearer_token and coin_queries:
+                try:
+                    self.x_client = XClient(
+                        bearer_token=bearer_token,
+                        coin_queries=coin_queries,
+                        requests_per_coin_per_day=social_config.get('requests_per_coin_per_day', 2),
+                        cache_ttl_hours=social_config.get('cache_ttl_hours', 12),
+                        cache_path=social_config.get('cache_path', 'data/social_cache.json'),
+                        max_results=social_config.get('max_results', 25),
+                    )
+                    self.logger.info("X sentiment client initialized")
+                except Exception as e:
+                    self.logger.error(f"Failed to initialize X client: {e}")
+                    self.x_client = None
+            else:
+                self.logger.warning(
+                    "X sentiment enabled but bearer token or coin queries missing; disabling."
+                )
+
         self.data_collector = DataCollector(
             roostoo_client=self.roostoo_client,
             data_storage=self.data_storage,
             horus_client=self.horus_client,
-            binance_client=self.binance_client
+            binance_client=self.binance_client,
+            social_client=self.x_client,
+            social_mapping=self.social_mapping,
         )
         
         # Initialize strategy

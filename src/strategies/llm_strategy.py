@@ -1,4 +1,4 @@
-"""LLM-Based Strategy for Market Analysis"""
+"""LLM-Based Strategy for Market Analysis via OpenRouter/OpenAI/Anthropic"""
 
 import json
 import hashlib
@@ -8,16 +8,16 @@ from ..utils.logger import get_logger
 
 
 class LLMStrategy(BaseStrategy):
-    """LLM-based strategy using OpenAI or Anthropic for market analysis."""
+    """LLM-based strategy using OpenRouter, OpenAI, or Anthropic for market analysis."""
     
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize LLM strategy.
         
         Config parameters:
-            provider: "openai" or "anthropic" (default: "openai")
-            model: Model name (default: "gpt-4" or "claude-3-opus")
-            api_key: API key (from environment)
+            provider: "openrouter", "openai", or "anthropic" (default: "openai")
+            model: Model name (default: provider-specific)
+            api_key: API key (from environment or config)
             enabled: Whether LLM is enabled (default: True)
             cache_responses: Whether to cache responses (default: True)
             max_tokens: Maximum tokens for response (default: 200)
@@ -26,10 +26,22 @@ class LLMStrategy(BaseStrategy):
         self.logger = get_logger("llm_strategy")
         
         self.provider = config.get('provider', 'openai').lower()
-        self.model = config.get('model', 'gpt-4' if self.provider == 'openai' else 'claude-3-opus-20240229')
+        provider_default_models = {
+            'openai': 'gpt-4',
+            'openrouter': 'microsoft/mai-ds-r1:free',
+            'anthropic': 'claude-3-opus-20240229',
+        }
+        self.model = config.get('model', provider_default_models.get(self.provider, 'gpt-4'))
         self.enabled = config.get('enabled', True)
         self.cache_responses = config.get('cache_responses', True)
         self.max_tokens = config.get('max_tokens', 200)
+        self.openrouter_config = {
+            'base_url': config.get('base_url', 'https://openrouter.ai/api/v1'),
+            'default_headers': config.get('default_headers'),
+            'extra_body': config.get('extra_body')
+        }
+        self.openrouter_headers: Dict[str, str] = {}
+        self.openrouter_extra_body: Optional[Dict[str, Any]] = None
         
         # Initialize LLM client
         self.llm_client = None
@@ -44,6 +56,32 @@ class LLMStrategy(BaseStrategy):
                         self.llm_client = openai.OpenAI(api_key=api_key)
                     else:
                         self.logger.warning("OpenAI API key not found, LLM strategy disabled")
+                        self.enabled = False
+                elif self.provider == 'openrouter':
+                    import openai
+                    api_key = config.get('api_key') or self._get_env_key('OPENROUTER_API_KEY')
+                    if api_key:
+                        client_kwargs = {
+                            'api_key': api_key,
+                            'base_url': self.openrouter_config['base_url'],
+                        }
+                        default_headers = self.openrouter_config.get('default_headers')
+                        if isinstance(default_headers, dict) and default_headers:
+                            sanitized_headers, missing_headers = self._sanitize_headers(default_headers)
+                            if sanitized_headers:
+                                self.openrouter_headers = sanitized_headers
+                                client_kwargs['default_headers'] = sanitized_headers
+                            if missing_headers:
+                                self.logger.warning(
+                                    "OpenRouter header(s) missing or unset: %s",
+                                    ", ".join(missing_headers)
+                                )
+                        extra_body = self.openrouter_config.get('extra_body')
+                        if isinstance(extra_body, dict) and extra_body:
+                            self.openrouter_extra_body = extra_body
+                        self.llm_client = openai.OpenAI(**client_kwargs)
+                    else:
+                        self.logger.warning("OpenRouter API key not found, LLM strategy disabled")
                         self.enabled = False
                 elif self.provider == 'anthropic':
                     import anthropic
@@ -68,18 +106,39 @@ class LLMStrategy(BaseStrategy):
         import os
         return os.getenv(key)
     
+    @staticmethod
+    def _sanitize_headers(headers: Dict[str, Any]) -> tuple[Dict[str, str], list]:
+        """Validate OpenRouter headers, separating unset placeholders."""
+        sanitized = {}
+        missing = []
+        for key, value in headers.items():
+            if isinstance(value, str) and value and "${" not in value:
+                sanitized[key] = value
+            else:
+                missing.append(key)
+        return sanitized, missing
+    
     def _get_cache_key(self, market_data: Dict[str, Any]) -> str:
         """Generate cache key from market data."""
         pair = market_data.get('pair', '')
         price = market_data.get('roostoo', {}).get('LastPrice', 0)
         change = market_data.get('roostoo', {}).get('Change', 0)
+        social = market_data.get('social', {}).get('x', {}) if isinstance(market_data.get('social'), dict) else {}
+        sentiment_score = social.get('score', 0)
+        sentiment_ts = social.get('fetched_at', '')
         
-        data_str = f"{pair}:{price}:{change}"
+        data_str = f"{pair}:{price}:{change}:{sentiment_score}:{sentiment_ts}"
         return hashlib.md5(data_str.encode()).hexdigest()
     
     def _call_openai(self, prompt: str) -> Optional[str]:
         """Call OpenAI API."""
         try:
+            request_kwargs = {}
+            if self.provider == 'openrouter':
+                if self.openrouter_headers:
+                    request_kwargs['extra_headers'] = self.openrouter_headers
+                if isinstance(self.openrouter_extra_body, dict) and self.openrouter_extra_body:
+                    request_kwargs['extra_body'] = self.openrouter_extra_body
             response = self.llm_client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -87,7 +146,8 @@ class LLMStrategy(BaseStrategy):
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=self.max_tokens,
-                temperature=0.3
+                temperature=0.3,
+                **request_kwargs
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -142,18 +202,24 @@ class LLMStrategy(BaseStrategy):
             else:
                 price_trend = "sideways"
         
+        social_sentiment = market_data.get('social', {}).get('x') if isinstance(market_data.get('social'), dict) else None
+        sentiment_context = self._build_sentiment_context(social_sentiment)
+        
         prompt = f"""Analyze this crypto market data and provide a trading signal:
 
 Pair: {pair}
 Current Price: ${price:,.2f}
 24h Change: {change_pct:.2f}%
 Price Trend: {price_trend}
+{sentiment_context}
 
 Based on this data, should I BUY, SELL, or HOLD? Provide your answer as: ACTION:CONFIDENCE
 Where ACTION is BUY, SELL, or HOLD, and CONFIDENCE is a number between 0.0 and 1.0."""
         
         # Call LLM
         if self.provider == 'openai':
+            response = self._call_openai(prompt)
+        elif self.provider == 'openrouter':
             response = self._call_openai(prompt)
         elif self.provider == 'anthropic':
             response = self._call_anthropic(prompt)
@@ -237,8 +303,22 @@ Where ACTION is BUY, SELL, or HOLD, and CONFIDENCE is a number between 0.0 and 1
         metadata = {
             'llm_response': llm_response,
             'provider': self.provider,
-            'model': self.model
+            'model': self.model,
+            'strategy': self.name
         }
+
+        if isinstance(market_data.get('social'), dict):
+            x_sentiment = market_data['social'].get('x')
+            if isinstance(x_sentiment, dict):
+                summary = x_sentiment.get('summary', {})
+                metadata['sentiment'] = {
+                    'x': {
+                        'score': x_sentiment.get('score'),
+                        'volume': summary.get('volume'),
+                        'fetched_at': x_sentiment.get('fetched_at'),
+                        'remaining_calls': x_sentiment.get('remaining_calls_today'),
+                    }
+                }
         
         return TradingSignal(
             action=action,
@@ -247,4 +327,43 @@ Where ACTION is BUY, SELL, or HOLD, and CONFIDENCE is a number between 0.0 and 1
             price=current_price,
             metadata=metadata
         )
+
+    @staticmethod
+    def _trim_text(text: str, limit: int = 140) -> str:
+        clean = ' '.join(text.split())
+        if len(clean) <= limit:
+            return clean
+        return clean[: limit - 3] + "..."
+
+    def _build_sentiment_context(self, sentiment: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(sentiment, dict):
+            return "\nSocial Sentiment: Unavailable."
+
+        summary = sentiment.get('summary', {})
+        lines = ["\nSocial Sentiment (X):"]
+
+        score = sentiment.get('score')
+        if isinstance(score, (int, float)):
+            lines.append(f"- Score: {score:+.2f} (scale -1 bearish to +1 bullish)")
+
+        volume = summary.get('volume')
+        if isinstance(volume, int):
+            lines.append(f"- Recent Volume: {volume} posts")
+
+        fetched_at = sentiment.get('fetched_at')
+        if isinstance(fetched_at, str) and fetched_at:
+            lines.append(f"- Last Update: {fetched_at}")
+
+        tags = summary.get('tags') if isinstance(summary, dict) else None
+        if isinstance(tags, list) and tags:
+            lines.append(f"- Top Tags: {', '.join(tags[:5])}")
+
+        samples = summary.get('sample_posts') if isinstance(summary, dict) else None
+        if isinstance(samples, list) and samples:
+            lines.append("- Sample Posts:")
+            for sample in samples[:2]:
+                if isinstance(sample, str) and sample.strip():
+                    lines.append(f"  • {self._trim_text(sample)}")
+
+        return "\n".join(lines)
 

@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from ..api.roostoo_client import RoostooClient
 from ..api.horus_client import HorusClient
 from ..api.binance_client import BinanceClient
+from ..api.x_client import XClient
 from .data_storage import DataStorage
 from ..utils.logger import get_logger
 
@@ -17,7 +18,9 @@ class DataCollector:
         roostoo_client: RoostooClient,
         data_storage: DataStorage,
         horus_client: Optional[HorusClient] = None,
-        binance_client: Optional[BinanceClient] = None
+        binance_client: Optional[BinanceClient] = None,
+        social_client: Optional[XClient] = None,
+        social_mapping: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize data collector.
@@ -32,6 +35,8 @@ class DataCollector:
         self.horus_client = horus_client
         self.binance_client = binance_client
         self.data_storage = data_storage
+        self.social_client = social_client
+        self.social_mapping = social_mapping or {}
         self.logger = get_logger("data_collector")
         self.exchange_info = None
         self.available_pairs = []
@@ -97,7 +102,8 @@ class DataCollector:
             'pair': pair,
             'roostoo': {},
             'binance': {},
-            'horus': {}
+            'horus': {},
+            'social': {},
         }
         
         # Get Roostoo data
@@ -118,6 +124,31 @@ class DataCollector:
             horus_data = self.horus_client.get_market_data(pair)
             if horus_data:
                 market_data['horus'] = horus_data
+
+        # Get X social sentiment
+        if self.social_client:
+            coin_key = self._resolve_social_key(pair)
+            if coin_key:
+                try:
+                    sentiment = self.social_client.get_sentiment(coin_key)
+                    if sentiment:
+                        market_data['social']['x'] = sentiment
+                        summary = sentiment.get('summary', {}) if isinstance(sentiment, dict) else {}
+                        score = sentiment.get('score')
+                        volume = summary.get('volume')
+                        self.logger.debug(
+                            "X sentiment for %s (%s): score=%s volume=%s remaining_calls=%s",
+                            pair,
+                            coin_key,
+                            score,
+                            volume,
+                            sentiment.get('remaining_calls_today'),
+                        )
+                except Exception as exc:
+                    self.logger.error(f"Error fetching X sentiment for {pair}: {exc}")
+
+        if not market_data['social']:
+            market_data['social'] = {}
         
         return market_data
     
@@ -128,6 +159,14 @@ class DataCollector:
             base, quote = pair.split('/')
             if quote == 'USD':
                 return f"{base}USDT"
+        return None
+
+    def _resolve_social_key(self, pair: str) -> Optional[str]:
+        if pair in self.social_mapping:
+            return self.social_mapping[pair]
+        if '/' in pair:
+            base, _ = pair.split('/')
+            return self.social_mapping.get(base, base)
         return None
     
     def get_historical_data(self, pair: str, limit: int = 100) -> List[Dict[str, Any]]:
