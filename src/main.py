@@ -1,6 +1,7 @@
 """Main Trading Bot Orchestration Loop"""
 
 import time
+import copy
 import signal
 import sys
 from typing import List, Dict, Any
@@ -51,10 +52,13 @@ class TradingBot:
         if horus_config.get('enabled', False):
             self.horus_client = HorusClient(api_key=horus_config.get('api_key'))
         
+        sources = data_config.get('sources', [])
+        binance_settings = data_config.get('binance', {}) or {}
+        binance_enabled = binance_settings.get('enabled', False) or ('binance' in sources)
+
         self.binance_client = None
-        if self.config.get('data', {}).get('sources', []):
-            if 'binance' in self.config.get('data', {}).get('sources', []):
-                self.binance_client = BinanceClient()
+        if binance_enabled:
+            self.binance_client = BinanceClient()
         
         # Initialize data storage and collector
         data_config = self.config.get('data', {})
@@ -99,10 +103,13 @@ class TradingBot:
             binance_client=self.binance_client,
             social_client=self.x_client,
             social_mapping=self.social_mapping,
+            binance_settings=binance_settings,
         )
         
         # Initialize strategy
-        self.strategy = EnsembleStrategy(self.config.get('strategies', {}))
+        strategies_config = copy.deepcopy(self.config.get('strategies', {}))
+        strategies_config['mode'] = 'live'
+        self.strategy = EnsembleStrategy(strategies_config)
         
         # Initialize performance tracker
         self.performance_tracker = PerformanceTracker(data_dir="data")
@@ -205,7 +212,8 @@ class TradingBot:
                 pair=pair,
                 price=current_price,
                 balance=available_balance,
-                signal_confidence=signal.confidence
+                signal_confidence=signal.confidence,
+                capital_multiplier=(signal.metadata or {}).get('capital_multiplier', 1.0)
             )
             
             if quantity <= 0:

@@ -2,6 +2,9 @@
 
 import time
 from typing import Dict, Any, List, Optional
+
+import numpy as np
+
 from ..api.roostoo_client import RoostooClient
 from ..api.horus_client import HorusClient
 from ..api.binance_client import BinanceClient
@@ -21,6 +24,7 @@ class DataCollector:
         binance_client: Optional[BinanceClient] = None,
         social_client: Optional[XClient] = None,
         social_mapping: Optional[Dict[str, str]] = None,
+        binance_settings: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize data collector.
@@ -37,6 +41,12 @@ class DataCollector:
         self.data_storage = data_storage
         self.social_client = social_client
         self.social_mapping = social_mapping or {}
+        self.binance_settings = binance_settings or {}
+        self.binance_settings.setdefault('interval', '1h')
+        self.binance_settings.setdefault('limit', 200)
+        self.binance_settings.setdefault('cache_seconds', 300)
+        self.binance_settings.setdefault('rsi_period', 14)
+        self.binance_settings.setdefault('sma_period', 20)
         self.logger = get_logger("data_collector")
         self.exchange_info = None
         self.available_pairs = []
@@ -113,11 +123,9 @@ class DataCollector:
         
         # Get Binance data for context (convert pair format)
         if self.binance_client:
-            binance_symbol = self._convert_pair_to_binance(pair)
-            if binance_symbol:
-                binance_price = self.binance_client.get_ticker_price(binance_symbol)
-                if binance_price:
-                    market_data['binance'] = {'price': binance_price}
+            binance_payload = self._get_binance_market_data(pair)
+            if binance_payload:
+                market_data['binance'] = binance_payload
         
         # Get Horus data (when implemented)
         if self.horus_client:
@@ -168,6 +176,70 @@ class DataCollector:
             base, _ = pair.split('/')
             return self.social_mapping.get(base, base)
         return None
+
+    def _get_binance_market_data(self, pair: str) -> Optional[Dict[str, Any]]:
+        symbol = self._convert_pair_to_binance(pair)
+        if not symbol:
+            return None
+
+        data: Dict[str, Any] = {}
+        try:
+            price = self.binance_client.get_ticker_price(symbol)
+            if price:
+                data['price'] = price
+
+            interval = self.binance_settings.get('interval', '1h')
+            limit = int(self.binance_settings.get('limit', 200))
+            cache_seconds = int(self.binance_settings.get('cache_seconds', 300))
+
+            klines = self.binance_client.get_klines(
+                symbol,
+                interval=interval,
+                limit=limit,
+                cache_seconds=cache_seconds,
+            )
+            if klines:
+                closes = [float(item[4]) for item in klines]
+                timestamps = [int(item[0]) for item in klines]
+                data['klines'] = {
+                    'interval': interval,
+                    'limit': len(closes),
+                    'closes': closes,
+                    'timestamps': timestamps,
+                }
+                data['indicators'] = self._compute_binance_indicators(closes)
+        except Exception as exc:
+            self.logger.error(f"Error fetching Binance data for {pair}: {exc}")
+
+        return data or None
+
+    def _compute_binance_indicators(self, closes: List[float]) -> Dict[str, float]:
+        indicators: Dict[str, float] = {}
+        if not closes:
+            return indicators
+
+        sma_period = int(self.binance_settings.get('sma_period', 20))
+        if len(closes) >= sma_period:
+            indicators['sma'] = float(np.mean(closes[-sma_period:]))
+
+        rsi_period = int(self.binance_settings.get('rsi_period', 14))
+        if len(closes) >= rsi_period + 1:
+            window = closes[-(rsi_period + 1):]
+            deltas = np.diff(window)
+            gains = np.clip(deltas, a_min=0, a_max=None)
+            losses = np.clip(-deltas, a_min=0, a_max=None)
+            avg_gain = float(np.mean(gains))
+            avg_loss = float(np.mean(losses))
+
+            if avg_loss == 0:
+                indicators['rsi'] = 100.0
+            elif avg_gain == 0:
+                indicators['rsi'] = 0.0
+            else:
+                rs = avg_gain / avg_loss
+                indicators['rsi'] = 100 - (100 / (1 + rs))
+
+        return indicators
     
     def get_historical_data(self, pair: str, limit: int = 100) -> List[Dict[str, Any]]:
         """

@@ -112,28 +112,37 @@ class TechnicalStrategy(BaseStrategy):
     def update_state(self, market_data: Dict[str, Any]):
         """Update price history with new market data."""
         pair = market_data.get('pair', '')
+        if not pair:
+            return
+
+        binance_data = market_data.get('binance', {}) or {}
+        binance_klines = binance_data.get('klines', {}) if isinstance(binance_data, dict) else {}
+        closes = binance_klines.get('closes') if isinstance(binance_klines, dict) else None
+
+        if closes:
+            max_history = max(300, self.bb_period * 3, self.macd_slow + self.macd_signal + 20)
+            self.price_history[pair] = closes[-max_history:]
+            return
+
         roostoo_data = market_data.get('roostoo', {})
-        
-        if pair and roostoo_data:
+        if roostoo_data:
             price = roostoo_data.get('LastPrice')
             if price:
-                if pair not in self.price_history:
-                    self.price_history[pair] = []
-                self.price_history[pair].append(price)
-                
-                # Keep only recent history (last 100 prices)
-                if len(self.price_history[pair]) > 100:
-                    self.price_history[pair] = self.price_history[pair][-100:]
+                history = self.price_history.setdefault(pair, [])
+                history.append(price)
+                if len(history) > 300:
+                    self.price_history[pair] = history[-300:]
     
     def generate_signal(self, market_data: Dict[str, Any]) -> TradingSignal:
         """Generate trading signal based on technical indicators."""
         pair = market_data.get('pair', '')
-        roostoo_data = market_data.get('roostoo', {})
-        
-        if not pair or not roostoo_data:
+        roostoo_data = market_data.get('roostoo', {}) or {}
+        binance_data = market_data.get('binance', {}) or {}
+
+        if not pair:
             return TradingSignal(action="HOLD", confidence=0.0, pair=pair)
-        
-        current_price = roostoo_data.get('LastPrice')
+
+        current_price = roostoo_data.get('LastPrice') or binance_data.get('price')
         if not current_price:
             return TradingSignal(action="HOLD", confidence=0.0, pair=pair)
         
@@ -203,7 +212,9 @@ class TechnicalStrategy(BaseStrategy):
             'rsi': rsi,
             'macd': macd_data,
             'bollinger_bands': bb_data,
-            'signals': signals
+            'signals': signals,
+            'strategy': self.name,
+            'binance_indicators': binance_data.get('indicators')
         }
         
         return TradingSignal(

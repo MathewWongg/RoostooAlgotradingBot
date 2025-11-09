@@ -34,6 +34,16 @@ strategies:
     default_headers:
       HTTP-Referer: ${OPENROUTER_HTTP_REFERER}  # Replace with your app URL (required by OpenRouter)
       X-Title: ${OPENROUTER_X_TITLE}            # Replace with your app name (required by OpenRouter)
+    trigger_confidence: 0.7       # Only call LLM when technical confidence exceeds this
+    require_divergence: true      # Require technical/baseline divergence before calling LLM
+    max_calls_per_day: 2          # LLM call cap per coin per day (live trading)
+    max_calls_per_backtest: 1     # LLM call cap per coin per backtest
+    enable_in_backtest: true      # Toggle LLM usage during backtests
+    capital_multipliers:
+      default: 0.5                # Base capital multiplier when LLM not triggered
+      divergence: 0.7             # Multiplier when LLM triggered due to divergence
+      confidence: 0.9             # Multiplier when LLM triggered via high confidence
+      llm_confirmed: 1.0          # Multiplier when LLM returns strong confirmation
   
   baseline:
     momentum_window: 5
@@ -67,9 +77,16 @@ trading:
   max_order_size: null  # null for no limit
 
 data:
-  sources: ["roostoo"]  # ["roostoo", "horus", "binance"]
+  sources: ["roostoo", "binance"]  # ["roostoo", "horus", "binance"]
   storage: "sqlite"
   data_retention_days: 30
+  binance:
+    enabled: true
+    interval: "1h"
+    limit: 200
+    cache_seconds: 300
+    rsi_period: 14
+    sma_period: 20
 
 social:
   x:
@@ -79,6 +96,8 @@ social:
     cache_ttl_hours: 12           # Reuse cached sentiment for 12 hours
     max_results: 25               # Tweets per fetch (max 100)
     cache_path: "data/social_cache.json"
+    enable_in_backtest: false     # Skip X fetching during backtests
+    max_calls_per_backtest: 1     # Backtest fetch cap when enabled
     coin_queries:
       TRUMP: "(#TrumpCoin OR $TRUMP OR \"Trump\" (\"token\" OR \"coin\")) lang:en -is:retweet"
       SHIB: "(#ShibaInu OR $SHIB OR #SHIBAINU) lang:en -is:retweet"

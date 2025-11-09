@@ -1,6 +1,7 @@
 """Backtesting Engine for Trading Bot"""
 
 import time
+import copy
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
@@ -93,7 +94,9 @@ class Backtester:
         )
         
         # Initialize strategy
-        self.strategy = EnsembleStrategy(self.config.get('strategies', {}))
+        strategies_config = copy.deepcopy(self.config.get('strategies', {}))
+        strategies_config['mode'] = 'backtest'
+        self.strategy = EnsembleStrategy(strategies_config)
         
         # Initialize risk manager
         trading_config = self.config.get('trading', {})
@@ -164,14 +167,16 @@ class Backtester:
         self,
         pair: str,
         price: float,
-        signal_confidence: float
+        signal_confidence: float,
+        capital_multiplier: float
     ) -> float:
         """Calculate position size based on risk parameters and pair weights."""
         return self.risk_manager.get_position_size(
             pair=pair,
             price=price,
             balance=self.balance,
-            signal_confidence=signal_confidence
+            signal_confidence=signal_confidence,
+            capital_multiplier=capital_multiplier
         )
     
     def _open_position(
@@ -477,10 +482,12 @@ class Backtester:
                         continue
 
                     # Base position size (equity-based sizing via risk manager; we'll cap by cash/exposure)
+                    capital_multiplier = (signal.metadata or {}).get('capital_multiplier', 1.0)
                     quantity = self._calculate_position_size(
                         pair=pair,
                         price=current_price,
-                        signal_confidence=signal.confidence
+                        signal_confidence=signal.confidence,
+                        capital_multiplier=capital_multiplier
                     )
 
                     # Exposure cap: ensure total notional does not exceed max_portfolio_exposure_pct * equity

@@ -34,17 +34,26 @@ class BaselineStrategy(BaseStrategy):
         pair = market_data.get('pair', '')
         roostoo_data = market_data.get('roostoo', {})
         
-        if pair and roostoo_data:
+        if not pair:
+            return
+
+        binance_data = market_data.get('binance', {}) or {}
+        binance_klines = binance_data.get('klines', {}) if isinstance(binance_data, dict) else {}
+        closes = binance_klines.get('closes') if isinstance(binance_klines, dict) else None
+
+        if closes:
+            max_history = max(self.momentum_window * 4, 100)
+            self.price_history[pair] = closes[-max_history:]
+            return
+
+        if roostoo_data:
             price = roostoo_data.get('LastPrice')
             if price:
-                if pair not in self.price_history:
-                    self.price_history[pair] = []
-                self.price_history[pair].append(price)
-                
-                # Keep only recent history
-                max_history = max(self.momentum_window * 2, 50)
-                if len(self.price_history[pair]) > max_history:
-                    self.price_history[pair] = self.price_history[pair][-max_history:]
+                history = self.price_history.setdefault(pair, [])
+                history.append(price)
+                max_history = max(self.momentum_window * 4, 100)
+                if len(history) > max_history:
+                    self.price_history[pair] = history[-max_history:]
     
     def _calculate_momentum_signal(self, prices: List[float]) -> tuple:
         """
@@ -96,12 +105,13 @@ class BaselineStrategy(BaseStrategy):
     def generate_signal(self, market_data: Dict[str, Any]) -> TradingSignal:
         """Generate trading signal based on momentum and mean reversion."""
         pair = market_data.get('pair', '')
-        roostoo_data = market_data.get('roostoo', {})
+        roostoo_data = market_data.get('roostoo', {}) or {}
+        binance_data = market_data.get('binance', {}) or {}
         
-        if not pair or not roostoo_data:
+        if not pair:
             return TradingSignal(action="HOLD", confidence=0.0, pair=pair)
         
-        current_price = roostoo_data.get('LastPrice')
+        current_price = roostoo_data.get('LastPrice') or binance_data.get('price')
         if not current_price:
             return TradingSignal(action="HOLD", confidence=0.0, pair=pair)
         
@@ -137,7 +147,9 @@ class BaselineStrategy(BaseStrategy):
             'momentum_confidence': momentum_conf,
             'mean_reversion_signal': mr_action,
             'mean_reversion_confidence': mr_conf,
-            'combined_score': combined_score
+            'combined_score': combined_score,
+            'binance_price': binance_data.get('price'),
+            'strategy': self.name
         }
         
         return TradingSignal(

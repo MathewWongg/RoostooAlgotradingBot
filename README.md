@@ -297,15 +297,31 @@ sudo journalctl -u trading-bot -f
 - `cache_responses`: Cache LLM responses to reduce API costs
 - `base_url`: Override API base for the selected provider (OpenRouter defaults to https://openrouter.ai/api/v1)
 - `default_headers`: Extra request headers (OpenRouter requires `HTTP-Referer` and `X-Title`)
+- `trigger_confidence`: Minimum technical confidence before the LLM is consulted
+- `require_divergence`: Whether the LLM is only called when technical and baseline signals disagree
+- `max_calls_per_day`: Per-coin LLM call cap in live trading (default: 2)
+- `max_calls_per_backtest`: Per-coin LLM call cap when backtesting (default: 1)
+- `enable_in_backtest`: Toggle LLM usage during backtests to save costs
+- `capital_multipliers`: Dynamic sizing multipliers (`default`, `divergence`, `confidence`, `llm_confirmed`) used by the risk manager
 
 **Social Sentiment (X)**:
 - `enabled`: Enable/disable X sentiment integration (default: false)
 - `bearer_token`: X API v2 bearer token (replace via environment variable)
 - `requests_per_coin_per_day`: Hard cap on API requests per coin per day (default: 2)
 - `cache_ttl_hours`: Cache duration before allowing a refresh (default: 12)
+- `enable_in_backtest`: Toggle social fetches during backtests (default: false)
+- `max_calls_per_backtest`: Backtest-only fetch cap when enabled (default: 1)
 - `coin_queries`: Map of coin symbols to X search queries (cashtags/hashtags). Default queries cover TRUMP, SOL, ETH, and DOGE.
 - `pair_mapping`: Optional overrides mapping trading pairs to coin query keys
 - `cache_path`: Location for cached sentiment JSON (default: `data/social_cache.json`)
+
+**Binance Market Data**:
+- `enabled`: Enable/disable Binance integration (default: true when listed under `data.sources`)
+- `interval`: Kline interval used when pulling historical candles (default: `1h`)
+- `limit`: Number of candles to fetch per request (default: 200)
+- `cache_seconds`: TTL before refreshing klines to avoid rate limits (default: 300)
+- `rsi_period`: RSI lookback applied to Binance closes before sharing with strategies
+- `sma_period`: SMA lookback applied to Binance closes before sharing with strategies
 
 **Baseline Strategy**:
 - `momentum_window`: Window for momentum calculation (default: 5)

@@ -52,7 +52,8 @@ class RiskManager:
         pair: str,
         price: float,
         balance: float,
-        signal_confidence: float
+        signal_confidence: float,
+        capital_multiplier: float = 1.0
     ) -> float:
         """
         Calculate position size based on risk parameters and pair weights.
@@ -83,7 +84,7 @@ class RiskManager:
             weighted_size = base_size
         
         # Adjust based on confidence
-        adjusted_size = weighted_size * signal_confidence
+        adjusted_size = weighted_size * signal_confidence * max(capital_multiplier, 0.0)
         
         # Convert to quantity
         quantity = adjusted_size / price if price > 0 else 0
