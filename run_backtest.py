@@ -27,7 +27,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--start-date',
         type=str,
-        help='Start date in YYYY-MM-DD format (default: 30 days ago)'
+        help='Start date in YYYY-MM-DD format (default: from config, typically 10 days ago)'
     )
     parser.add_argument(
         '--end-date',

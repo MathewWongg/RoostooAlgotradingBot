@@ -188,8 +188,9 @@ class Backtester:
                 return False
             self.balance -= cost
         else:  # SELL
-            # For backtesting, we allow short selling
-            self.balance += cost
+            # Spot-only mode: do not allow opening short positions
+            self.logger.info(f"Spot-only: ignoring attempt to OPEN SELL on {pair}")
+            return False
         
         position = BacktestPosition(
             pair=pair,
@@ -335,7 +336,7 @@ class Backtester:
         Run backtest on historical data.
         
         Args:
-            start_date: Start date in YYYY-MM-DD format (default: 30 days ago)
+            start_date: Start date in YYYY-MM-DD format (default: from config, typically 10 days ago)
             end_date: End date in YYYY-MM-DD format (default: today)
             pairs: List of pairs to backtest (default: from config)
             
@@ -354,7 +355,10 @@ class Backtester:
         if start_date:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         else:
-            start_dt = end_dt - timedelta(days=30)
+            # Get default days from config
+            backtest_config = self.config.get('backtest', {})
+            default_days = backtest_config.get('default_start_days', 10)
+            start_dt = end_dt - timedelta(days=default_days)
         
         start_timestamp = int(start_dt.timestamp() * 1000)
         end_timestamp = int(end_dt.timestamp() * 1000)
@@ -457,23 +461,51 @@ class Backtester:
                 if pair in self.positions:
                     position = self.positions[pair]
                     
-                    # Close position if signal is opposite
-                    if (position.side == "BUY" and signal.action == "SELL") or \
-                       (position.side == "SELL" and signal.action == "BUY"):
+                    # Spot-only: SELL signal closes existing BUY position
+                    if position.side == "BUY" and signal.action == "SELL":
                         self._close_position(pair, current_price, timestamp)
                 
-                # Open new position if signal is BUY or SELL
-                if signal.action in ["BUY", "SELL"]:
+                # Open new position only on BUY signal (spot-only)
+                if signal.action == "BUY" and pair not in self.positions:
+                    # Concurrency cap
+                    max_concurrent = getattr(self.risk_manager, 'max_concurrent_positions', None)
+                    if max_concurrent is not None and len(self.positions) >= int(max_concurrent):
+                        continue
+
+                    # Base position size (equity-based sizing via risk manager; we'll cap by cash/exposure)
                     quantity = self._calculate_position_size(
                         pair=pair,
                         price=current_price,
                         signal_confidence=signal.confidence
                     )
-                    
+
+                    # Exposure cap: ensure total notional does not exceed max_portfolio_exposure_pct * equity
+                    max_exposure_pct = getattr(self.risk_manager, 'max_portfolio_exposure_pct', None)
+                    if max_exposure_pct is not None:
+                        # Compute current exposure as sum of position notionals at current prices
+                        current_exposure = 0.0
+                        for p in self.positions.values():
+                            ref_price = current_prices.get(p.pair, p.current_price)
+                            current_exposure += (p.quantity * ref_price)
+                        # Equity for cap (cash + unrealized)
+                        equity_cap = self._get_total_equity(current_prices)
+                        allowed_notional = float(max_exposure_pct) * equity_cap - current_exposure
+                        if allowed_notional <= 0:
+                            quantity = 0.0
+                        else:
+                            max_qty_by_exposure = allowed_notional / current_price
+                            if quantity > max_qty_by_exposure:
+                                quantity = max(0.0, max_qty_by_exposure)
+
+                    # Cash cap: cannot spend more cash than available
+                    max_qty_by_cash = self.balance / current_price if current_price > 0 else 0.0
+                    if quantity > max_qty_by_cash:
+                        quantity = max(0.0, max_qty_by_cash)
+
                     if quantity > 0:
                         self._open_position(
                             pair=pair,
-                            side=signal.action,
+                            side="BUY",
                             quantity=quantity,
                             price=current_price,
                             timestamp=timestamp
@@ -498,6 +530,17 @@ class Backtester:
         for pair in list(self.positions.keys()):
             if pair in final_prices:
                 self._close_position(pair, final_prices[pair], sorted_timestamps[-1])
+        
+        # Append final balance/equity snapshot after closing remaining positions
+        if sorted_timestamps:
+            final_timestamp = sorted_timestamps[-1]
+            final_equity = self._get_total_equity(final_prices) if final_prices else self.balance
+            self.balance_history.append({
+                'timestamp': final_timestamp,
+                'balance': self.balance,
+                'equity': final_equity,
+                'open_positions': len(self.positions)
+            })
         
         # Calculate results
         result = self._calculate_results(start_dt, end_dt)

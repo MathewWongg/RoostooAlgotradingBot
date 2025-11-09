@@ -43,11 +43,19 @@ trading:
     "TRUMP/USD": 2
     "SOL/USD": 8
   order_type: "MARKET"  # or "LIMIT"
-  position_size_pct: 0.1  # 10% of balance per trade
+  # Spot-only execution and risk knobs
+  spot_only: true
+  # Sizing: prefer equity-based max per-position; fallback to position_size_pct
+  max_position_pct: 0.03           # 3% of equity per position
+  position_size_pct: 0.1           # fallback legacy: 10% per trade
+  # Exposure and concurrency limits
+  max_portfolio_exposure_pct: 0.30 # at most 30% of equity invested
+  max_concurrent_positions: 2      # at most 2 simultaneous positions
+  # Trading cadence and filters
   max_positions: 3
   polling_interval: 60  # seconds
-  min_confidence: 0.5  # Minimum signal confidence to execute trade
-  cooldown_period: 300  # seconds between trades for same pair
+  min_confidence: 0.6  # Minimum signal confidence to execute trade
+  cooldown_period: 600  # seconds between trades for same pair
   min_order_size: 1.0
   max_order_size: null  # null for no limit
 
@@ -59,7 +67,7 @@ data:
 backtest:
   enabled: true
   initial_balance: 50000.0
-  default_start_days: 30  # Days to look back if start_date not specified
+  default_start_days: 10  # Days to look back if start_date not specified
   output_file: "data/backtest_report.json"
 
 logging:
