@@ -56,6 +56,9 @@ class BacktestResult:
     avg_loss: Optional[float]
     trades_by_pair: Dict[str, int]
     pnl_by_pair: Dict[str, float]
+    avg_capital_per_trade: Optional[float]
+    max_capital_per_trade: Optional[float]
+    min_capital_per_trade: Optional[float]
 
 
 class Backtester:
@@ -281,7 +284,8 @@ class Backtester:
             'duration_ms': duration_ms,
             'duration_str': duration_str,
             'entry_value': position.quantity * position.entry_price,
-            'exit_value': position.quantity * price
+            'exit_value': position.quantity * price,
+            'capital_used': position.quantity * position.entry_price
         }
         
         self.closed_trades.append(trade_record)
@@ -609,6 +613,11 @@ class Backtester:
             pair = trade['pair']
             trades_by_pair[pair] = trades_by_pair.get(pair, 0) + 1
             pnl_by_pair[pair] = pnl_by_pair.get(pair, 0.0) + trade['pnl']
+
+        capital_per_trade = [t['entry_value'] for t in self.closed_trades]
+        avg_capital = sum(capital_per_trade) / len(capital_per_trade) if capital_per_trade else None
+        max_capital = max(capital_per_trade) if capital_per_trade else None
+        min_capital = min(capital_per_trade) if capital_per_trade else None
         
         return BacktestResult(
             start_date=start_date.isoformat(),
@@ -628,7 +637,10 @@ class Backtester:
             avg_win=avg_win,
             avg_loss=avg_loss,
             trades_by_pair=trades_by_pair,
-            pnl_by_pair=pnl_by_pair
+            pnl_by_pair=pnl_by_pair,
+            avg_capital_per_trade=avg_capital,
+            max_capital_per_trade=max_capital,
+            min_capital_per_trade=min_capital
         )
     
     def save_report(self, result: BacktestResult, output_path: str = "data/backtest_report.json"):
@@ -671,6 +683,10 @@ class Backtester:
             print(f"Average Win: ${result.avg_win:,.2f}")
         if result.avg_loss:
             print(f"Average Loss: ${result.avg_loss:,.2f}")
+        if result.avg_capital_per_trade is not None:
+            print(f"Avg Capital per Trade: ${result.avg_capital_per_trade:,.2f}")
+            print(f"Max Capital per Trade: ${result.max_capital_per_trade:,.2f}")
+            print(f"Min Capital per Trade: ${result.min_capital_per_trade:,.2f}")
         print(f"\nTrades by Pair:")
         for pair, count in result.trades_by_pair.items():
             pnl = result.pnl_by_pair.get(pair, 0)
@@ -681,7 +697,7 @@ class Backtester:
             print(f"\n{'='*70}")
             print("DETAILED TRADE LIST")
             print(f"{'='*70}")
-            print(f"{'Timestamp':<20} {'Pair':<12} {'Side':<5} {'Qty':<12} {'Entry':<10} {'Exit':<10} {'PnL':<12} {'PnL%':<8} {'Duration':<10}")
+            print(f"{'Timestamp':<20} {'Pair':<12} {'Side':<5} {'Qty':<12} {'Entry':<10} {'Exit':<10} {'Capital':<12} {'PnL':<12} {'PnL%':<8} {'Duration':<10}")
             print("-" * 70)
             
             for trade in self.closed_trades:
@@ -696,6 +712,7 @@ class Backtester:
                     f"{trade['quantity']:<12.6f} "
                     f"${trade['entry_price']:<9.4f} "
                     f"${trade['exit_price']:<9.4f} "
+                    f"${trade['capital_used']:<11.2f} "
                     f"{pnl_sign}${trade['pnl']:<11.2f} "
                     f"{pnl_pct_sign}{trade['pnl_pct']:<7.2f}% "
                     f"{trade['duration_str']:<10}"

@@ -54,7 +54,7 @@ trading:
   # Trading cadence and filters
   max_positions: 3
   polling_interval: 60  # seconds
-  min_confidence: 0.6  # Minimum signal confidence to execute trade
+  min_confidence: 0.5  # Minimum signal confidence to execute trade (lowered from 0.6 to increase trade frequency)
   cooldown_period: 600  # seconds between trades for same pair
   min_order_size: 1.0
   max_order_size: null  # null for no limit
