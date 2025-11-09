@@ -56,6 +56,12 @@ data:
   storage: "sqlite"
   data_retention_days: 30
 
+backtest:
+  enabled: true
+  initial_balance: 50000.0
+  default_start_days: 30  # Days to look back if start_date not specified
+  output_file: "data/backtest_report.json"
+
 logging:
   level: "INFO"
   file: "logs/bot.log"

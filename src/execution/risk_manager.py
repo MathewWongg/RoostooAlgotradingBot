@@ -8,13 +8,13 @@ from ..utils.logger import get_logger
 class RiskManager:
     """Manage trading risk with position sizing and limits."""
     
-    def __init__(self, config: Dict[str, Any], roostoo_client: RoostooClient):
+    def __init__(self, config: Dict[str, Any], roostoo_client: Optional[RoostooClient] = None):
         """
         Initialize risk manager.
         
         Args:
             config: Risk management configuration
-            roostoo_client: Roostoo API client
+            roostoo_client: Roostoo API client (optional, for backtesting)
         """
         self.config = config
         self.roostoo_client = roostoo_client

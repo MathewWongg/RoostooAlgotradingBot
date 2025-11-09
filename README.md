@@ -111,6 +111,66 @@ Run the bot directly:
 python -m src.main --config config/config.yaml
 ```
 
+Or use the convenience script:
+
+```bash
+python run_bot.py --config config/config.yaml
+```
+
+### Backtesting
+
+The bot includes a comprehensive backtesting system that allows you to test strategies on historical data.
+
+#### Running a Backtest
+
+```bash
+# Basic backtest (uses last 30 days of data)
+python run_backtest.py
+
+# Custom date range
+python run_backtest.py --start-date 2024-01-01 --end-date 2024-01-31
+
+# Custom pairs and initial balance
+python run_backtest.py --pairs TRUMP/USD SOL/USD --initial-balance 100000
+
+# Save report to custom location
+python run_backtest.py --output data/my_backtest_report.json
+```
+
+#### Backtest Options
+
+- `--config`: Path to configuration file (default: `config/config.yaml`)
+- `--start-date`: Start date in YYYY-MM-DD format (default: 30 days ago)
+- `--end-date`: End date in YYYY-MM-DD format (default: today)
+- `--pairs`: Trading pairs to backtest (default: from config)
+- `--initial-balance`: Starting balance (default: 50000)
+- `--output`: Output file path (default: `data/backtest_report.json`)
+
+#### Backtest Report
+
+The backtest generates a comprehensive report including:
+
+- **Performance Metrics**: Total return, return percentage, win rate
+- **Risk Metrics**: Max drawdown, Sharpe ratio
+- **Trade Statistics**: Total trades, winning/losing trades, average win/loss
+- **Pair Analysis**: Trades and PnL breakdown by trading pair
+- **Balance History**: Equity curve over time
+- **Trade Log**: Detailed log of all executed trades
+
+The report is saved as JSON and also printed to the console.
+
+#### Requirements for Backtesting
+
+1. **Historical Data**: The bot needs historical data in the database. Run the bot in live mode first to collect data, or import historical data.
+
+2. **Data Collection**: Historical data is automatically stored when the bot runs. Ensure you have sufficient data for your backtest period.
+
+3. **Configuration**: The backtest uses the same configuration as live trading, including:
+   - Trading pairs and pair weights
+   - Strategy parameters
+   - Risk management settings
+   - Minimum confidence thresholds
+
 ### Docker Deployment
 
 #### Build and Run with Docker Compose

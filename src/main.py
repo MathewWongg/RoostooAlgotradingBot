@@ -203,18 +203,46 @@ class TradingBot:
             if order_response:
                 order_detail = order_response.get('OrderDetail', {})
                 order_id = order_detail.get('OrderID')
+                filled_price = order_detail.get('Price', current_price)
+                filled_quantity = order_detail.get('FilledQuantity', quantity)
+                commission = order_detail.get('CommissionChargeValue', 0)
+                
+                # Get updated balance
+                balances = self._get_balance()
+                base_currency = pair.split('/')[1] if '/' in pair else 'USD'
+                updated_balance = balances.get(base_currency, 0)
+                
+                # Get pair weight if configured
+                pair_weight = None
+                if hasattr(self.risk_manager, 'pair_weights') and pair in self.risk_manager.pair_weights:
+                    pair_weight = self.risk_manager.pair_weights[pair]
                 
                 # Record trade in risk manager
                 self.risk_manager.record_trade(
                     pair=pair,
                     side=signal.action,
                     quantity=quantity,
-                    price=order_detail.get('Price', current_price),
+                    price=filled_price,
                     order_id=order_id
                 )
                 
-                self.logger.info(
-                    f"Order placed: {signal.action} {quantity} {pair} @ {order_price or 'MARKET'}"
+                # Log detailed trade information
+                from ..utils.logger import log_trade_details
+                log_trade_details(
+                    self.logger,
+                    pair=pair,
+                    side=signal.action,
+                    quantity=quantity,
+                    price=filled_price,
+                    order_id=order_id,
+                    signal_confidence=signal.confidence,
+                    order_value=quantity * filled_price,
+                    filled_quantity=filled_quantity,
+                    filled_avg_price=order_detail.get('FilledAverPrice'),
+                    commission=commission,
+                    balance=updated_balance,
+                    pair_weight=pair_weight,
+                    status=order_detail.get('Status', 'UNKNOWN')
                 )
         
         except Exception as e:
