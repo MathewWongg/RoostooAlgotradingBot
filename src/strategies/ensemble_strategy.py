@@ -6,6 +6,7 @@ from .base_strategy import BaseStrategy, TradingSignal
 from .technical_strategy import TechnicalStrategy
 from .baseline_strategy import BaselineStrategy
 from .llm_strategy import LLMStrategy
+from .oversold_bounce_strategy import OversoldBounceStrategy
 from ..utils.logger import get_logger
 
 
@@ -29,16 +30,26 @@ class EnsembleStrategy(BaseStrategy):
         self.logger = get_logger("ensemble_strategy")
         
         ensemble_config = config.get('ensemble', {})
-        self.technical_weight = ensemble_config.get('technical_weight', 0.4)
-        self.llm_weight = ensemble_config.get('llm_weight', 0.3)
-        self.baseline_weight = ensemble_config.get('baseline_weight', 0.3)
-        
-        # Normalize weights
-        total_weight = self.technical_weight + self.llm_weight + self.baseline_weight
+        self.technical_weight = float(ensemble_config.get('technical_weight', 0.4))
+        self.llm_weight = float(ensemble_config.get('llm_weight', 0.3))
+        self.baseline_weight = float(ensemble_config.get('baseline_weight', 0.3))
+        self.oversold_weight = float(ensemble_config.get('oversold_weight', 0.0))
+
+        # Normalize weights (ignore disabled strategies)
+        weight_map = {
+            'technical': self.technical_weight,
+            'llm': self.llm_weight,
+            'baseline': self.baseline_weight,
+            'oversold': self.oversold_weight,
+        }
+        total_weight = sum(w for w in weight_map.values() if w > 0)
         if total_weight > 0:
-            self.technical_weight /= total_weight
-            self.llm_weight /= total_weight
-            self.baseline_weight /= total_weight
+            for name, value in weight_map.items():
+                if value > 0:
+                    normalized = value / total_weight
+                else:
+                    normalized = 0.0
+                setattr(self, f"{name}_weight", normalized)
         
         # Initialize component strategies
         self.mode = config.get('mode', 'live')
@@ -47,14 +58,25 @@ class EnsembleStrategy(BaseStrategy):
         self.technical_strategy = TechnicalStrategy(config.get('technical', {}))
         self.baseline_strategy = BaselineStrategy(config.get('baseline', {}))
         self.llm_strategy = LLMStrategy(llm_config)
+        oversold_config = config.get('oversold', {})
+        self.oversold_strategy = OversoldBounceStrategy(oversold_config) if oversold_config.get('enabled', True) else None
+        if self.oversold_strategy is None and self.oversold_weight > 0:
+            self.oversold_weight = 0.0
+            remaining = self.technical_weight + self.llm_weight + self.baseline_weight
+            if remaining > 0:
+                self.technical_weight /= remaining
+                self.llm_weight /= remaining
+                self.baseline_weight /= remaining
         self.llm_trigger_confidence = llm_config.get('trigger_confidence', 0.7)
         self.llm_require_divergence = llm_config.get('require_divergence', True)
         capital_cfg = llm_config.get('capital_multipliers', {})
         self.capital_multipliers = {
-            'default': capital_cfg.get('default', 0.5),
-            'divergence': capital_cfg.get('divergence', 0.7),
-            'confidence': capital_cfg.get('confidence', 0.9),
-            'llm_confirmed': capital_cfg.get('llm_confirmed', 1.0),
+            'default': capital_cfg.get('default', 1.0),
+            'per_signal_bonus': capital_cfg.get('per_signal_bonus', 0.15),
+            'divergence': capital_cfg.get('divergence', 0.2),
+            'confidence': capital_cfg.get('confidence', 0.25),
+            'llm_confirmed': capital_cfg.get('llm_confirmed', 0.3),
+            'oversold_trigger': capital_cfg.get('oversold_trigger', 0.35),
         }
         self.llm_max_calls_per_day = llm_config.get('max_calls_per_day', 2)
         self.llm_max_calls_per_backtest = llm_config.get('max_calls_per_backtest', 1)
@@ -67,6 +89,8 @@ class EnsembleStrategy(BaseStrategy):
         self.technical_strategy.update_state(market_data)
         self.baseline_strategy.update_state(market_data)
         self.llm_strategy.update_state(market_data)
+        if self.oversold_strategy:
+            self.oversold_strategy.update_state(market_data)
     
     def generate_signal(self, market_data: Dict[str, Any]) -> TradingSignal:
         """Generate ensemble signal by combining all strategy signals."""
@@ -83,6 +107,11 @@ class EnsembleStrategy(BaseStrategy):
             strategy_records.append(("technical", technical_signal, self.technical_weight))
         if baseline_signal:
             strategy_records.append(("baseline", baseline_signal, self.baseline_weight))
+        oversold_signal = None
+        if self.oversold_strategy:
+            oversold_signal = self._safe_generate(self.oversold_strategy, market_data)
+            if oversold_signal:
+                strategy_records.append(("oversold", oversold_signal, self.oversold_weight))
 
         if not strategy_records:
             return TradingSignal(action="HOLD", confidence=0.0, pair=pair)
@@ -170,8 +199,19 @@ class EnsembleStrategy(BaseStrategy):
             'llm_trigger': trigger_reason,
         }
 
-        capital_multiplier = self._determine_capital_multiplier(trigger_reason, technical_signal, llm_signal)
+        capital_multiplier = self._determine_capital_multiplier(
+            trigger_reason,
+            technical_signal,
+            baseline_signal,
+            llm_signal,
+            oversold_signal,
+            signals,
+            buy_score,
+        )
         metadata['capital_multiplier'] = capital_multiplier
+        metadata['oversold_capital_boost'] = bool(
+            oversold_signal and oversold_signal.metadata and oversold_signal.metadata.get('capital_boost')
+        )
         
         return TradingSignal(
             action=action,
@@ -189,6 +229,8 @@ class EnsembleStrategy(BaseStrategy):
         self.llm_strategy.reset()
         self.llm_call_log.clear()
         self.llm_backtest_calls.clear()
+        if self.oversold_strategy:
+            self.oversold_strategy.reset()
 
     def _safe_generate(self, strategy: BaseStrategy, market_data: Dict[str, Any]) -> Optional[TradingSignal]:
         try:
@@ -238,22 +280,49 @@ class EnsembleStrategy(BaseStrategy):
         self,
         trigger_reason: Optional[str],
         technical_signal: Optional[TradingSignal],
-        llm_signal: Optional[TradingSignal]
+        baseline_signal: Optional[TradingSignal],
+        llm_signal: Optional[TradingSignal],
+        oversold_signal: Optional[TradingSignal],
+        signals: List[tuple],
+        buy_score: float,
     ) -> float:
-        multiplier = self.capital_multipliers.get('default', 0.5)
+        # Start at base multiplier of 1.0
+        multiplier = self.capital_multipliers.get('default', 1.0)
+        per_signal_bonus = self.capital_multipliers.get('per_signal_bonus', 0.15)
 
+        # Count aligned BUY signals (excluding HOLD)
+        buy_signals_count = 0
+        if technical_signal and technical_signal.action == "BUY":
+            buy_signals_count += 1
+        if baseline_signal and baseline_signal.action == "BUY":
+            buy_signals_count += 1
+        if oversold_signal and oversold_signal.action == "BUY":
+            buy_signals_count += 1
+        if llm_signal and llm_signal.action == "BUY":
+            buy_signals_count += 1
+
+        # Add bonus for each aligned BUY signal
+        if buy_signals_count > 0:
+            multiplier += (buy_signals_count - 1) * per_signal_bonus
+
+        # Add bonuses for special conditions (additive, not replacement)
         if trigger_reason == "divergence":
-            multiplier = self.capital_multipliers.get('divergence', multiplier)
+            multiplier += self.capital_multipliers.get('divergence', 0.2)
         elif trigger_reason == "confidence":
-            multiplier = self.capital_multipliers.get('confidence', multiplier)
+            multiplier += self.capital_multipliers.get('confidence', 0.25)
 
         if trigger_reason and llm_signal and llm_signal.confidence >= 0.6:
-            multiplier = max(multiplier, self.capital_multipliers.get('llm_confirmed', multiplier))
+            multiplier += self.capital_multipliers.get('llm_confirmed', 0.3)
 
+        if oversold_signal and oversold_signal.metadata:
+            if oversold_signal.metadata.get('capital_boost'):
+                multiplier += self.capital_multipliers.get('oversold_trigger', 0.35)
+
+        # Reduce multiplier if technical signal is HOLD (weakens conviction)
         if technical_signal and technical_signal.action == "HOLD":
-            multiplier = min(multiplier, 0.5)
+            multiplier *= 0.7
 
-        return max(0.0, multiplier)
+        return max(1.0, multiplier)  # Minimum 1.0, can go higher with more signals
 
     def _remaining_llm_calls_today(self, pair: str) -> int:
         now = datetime.now(timezone.utc)

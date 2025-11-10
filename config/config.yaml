@@ -9,9 +9,10 @@ horus:
 
 strategies:
   ensemble:
-    technical_weight: 0.4
-    llm_weight: 0.3
-    baseline_weight: 0.3
+    technical_weight: 0.31
+    llm_weight: 0.23
+    baseline_weight: 0.23
+    oversold_weight: 0.23
   
   technical:
     rsi_period: 14
@@ -40,10 +41,31 @@ strategies:
     max_calls_per_backtest: 1     # LLM call cap per coin per backtest
     enable_in_backtest: true      # Toggle LLM usage during backtests
     capital_multipliers:
-      default: 0.5                # Base capital multiplier when LLM not triggered
-      divergence: 0.7             # Multiplier when LLM triggered due to divergence
-      confidence: 0.9             # Multiplier when LLM triggered via high confidence
-      llm_confirmed: 1.0          # Multiplier when LLM returns strong confirmation
+      default: 1.0                # Base capital multiplier (starts at 1.0)
+      per_signal_bonus: 0.15      # Additional multiplier per aligned BUY signal
+      divergence: 0.2             # Additional multiplier when LLM triggered due to divergence
+      confidence: 0.25            # Additional multiplier when LLM triggered via high confidence
+      llm_confirmed: 0.3          # Additional multiplier when LLM returns strong confirmation
+      oversold_trigger: 0.35      # Additional multiplier when oversold meme setup fires
+
+  oversold:
+    enabled: true
+    rsi_period: 14
+    rsi_threshold: 25
+    bb_period: 20
+    bb_std: 2.0
+    volume_ema_period: 20
+    sma_period: 200
+    community_threshold: 10000
+    base_confidence: 0.7
+    max_confidence: 0.92
+    capital_boost_multiplier: 1.35
+    community_membership:
+      TRUMP: 25000
+      SHIB: 400000
+      DOGE: 380000
+      SOL: 150000
+      ETH: 600000
   
   baseline:
     momentum_window: 5

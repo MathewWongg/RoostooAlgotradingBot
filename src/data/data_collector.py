@@ -199,13 +199,23 @@ class DataCollector:
                 cache_seconds=cache_seconds,
             )
             if klines:
+                opens = [float(item[1]) for item in klines]
+                highs = [float(item[2]) for item in klines]
+                lows = [float(item[3]) for item in klines]
                 closes = [float(item[4]) for item in klines]
-                timestamps = [int(item[0]) for item in klines]
+                volumes = [float(item[5]) for item in klines]
+                open_times = [int(item[0]) for item in klines]
+                close_times = [int(item[6]) for item in klines]
                 data['klines'] = {
                     'interval': interval,
                     'limit': len(closes),
+                    'opens': opens,
+                    'highs': highs,
+                    'lows': lows,
                     'closes': closes,
-                    'timestamps': timestamps,
+                    'volumes': volumes,
+                    'open_times': open_times,
+                    'close_times': close_times,
                 }
                 data['indicators'] = self._compute_binance_indicators(closes)
         except Exception as exc:
