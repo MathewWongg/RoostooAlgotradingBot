@@ -60,6 +60,8 @@ class BacktestResult:
     avg_capital_per_trade: Optional[float]
     max_capital_per_trade: Optional[float]
     min_capital_per_trade: Optional[float]
+    llm_api_status: Dict[str, Any]
+    x_api_status: Dict[str, Any]
 
 
 class Backtester:
@@ -212,33 +214,8 @@ class Backtester:
         self.positions[pair] = position
         self.last_trade_time[pair] = timestamp
         
-        # Get pair weight if configured
-        pair_weight = None
-        if hasattr(self.risk_manager, 'pair_weights') and pair in self.risk_manager.pair_weights:
-            pair_weight = self.risk_manager.pair_weights[pair]
-        
-        order_value = quantity * price
-        
-        trade_details = [
-            f"\n{'='*70}",
-            f"TRADE OPENED - {side}",
-            f"{'='*70}",
-            f"Pair:              {pair}",
-            f"Side:               {side}",
-            f"Quantity:           {quantity:.6f}",
-            f"Price:              ${price:.4f}",
-            f"Order Value:        ${order_value:,.2f}"
-        ]
-        
-        if pair_weight:
-            trade_details.append(f"Pair Weight:        {pair_weight:.2%}")
-        
-        trade_details.extend([
-            f"Balance:            ${self.balance:,.2f}",
-            f"{'='*70}\n"
-        ])
-        
-        self.logger.info("\n".join(trade_details))
+        # Simple log for trade opened
+        self.logger.info(f"Trade opened: {side} {quantity:.6f} {pair} @ ${price:.4f}")
         
         return True
     
@@ -295,25 +272,12 @@ class Backtester:
         
         self.closed_trades.append(trade_record)
         
-        # Log detailed trade information
+        # Simple log for trade closed
         pnl_sign = "+" if pnl >= 0 else ""
-        pnl_pct = trade_record['pnl_pct']
-        
         self.logger.info(
-            f"\n{'='*70}\n"
-            f"TRADE CLOSED - {position.side}\n"
-            f"{'='*70}\n"
-            f"Pair:              {pair}\n"
-            f"Side:               {position.side}\n"
-            f"Quantity:           {position.quantity:.6f}\n"
-            f"Entry Price:        ${position.entry_price:.4f}\n"
-            f"Exit Price:         ${price:.4f}\n"
-            f"Entry Value:        ${trade_record['entry_value']:,.2f}\n"
-            f"Exit Value:         ${trade_record['exit_value']:,.2f}\n"
-            f"PnL:                {pnl_sign}${pnl:,.2f} ({pnl_sign}{pnl_pct:.2f}%)\n"
-            f"Duration:           {duration_str}\n"
-            f"Balance:            ${self.balance:,.2f}\n"
-            f"{'='*70}\n"
+            f"Trade closed: {position.side} {position.quantity:.6f} {pair} "
+            f"Entry: ${position.entry_price:.4f} Exit: ${price:.4f} "
+            f"PnL: {pnl_sign}${pnl:,.2f} ({pnl_sign}{trade_record['pnl_pct']:.2f}%)"
         )
         
         del self.positions[pair]
@@ -626,6 +590,27 @@ class Backtester:
         max_capital = max(capital_per_trade) if capital_per_trade else None
         min_capital = min(capital_per_trade) if capital_per_trade else None
         
+        # Get LLM API status
+        llm_api_status = {
+            'enabled': self.strategy.llm_strategy.enabled,
+            'enabled_in_backtest': self.strategy.llm_enable_in_backtest,
+            'total_calls': sum(self.strategy.llm_backtest_calls.values()),
+            'calls_by_pair': dict(self.strategy.llm_backtest_calls),
+            'max_calls_per_backtest': self.strategy.llm_max_calls_per_backtest,
+            'provider': self.strategy.llm_strategy.provider,
+            'model': self.strategy.llm_strategy.model
+        }
+        
+        # Get X API status
+        social_config = self.config.get('social', {}).get('x', {})
+        x_api_status = {
+            'enabled': social_config.get('enabled', False),
+            'enabled_in_backtest': social_config.get('enable_in_backtest', False),
+            'max_calls_per_backtest': social_config.get('max_calls_per_backtest', 1),
+            'requests_per_coin_per_day': social_config.get('requests_per_coin_per_day', 2),
+            'cache_ttl_hours': social_config.get('cache_ttl_hours', 12)
+        }
+        
         return BacktestResult(
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
@@ -647,7 +632,9 @@ class Backtester:
             pnl_by_pair=pnl_by_pair,
             avg_capital_per_trade=avg_capital,
             max_capital_per_trade=max_capital,
-            min_capital_per_trade=min_capital
+            min_capital_per_trade=min_capital,
+            llm_api_status=llm_api_status,
+            x_api_status=x_api_status
         )
     
     def save_report(self, result: BacktestResult, output_path: str = "data/backtest_report.json"):
@@ -724,6 +711,43 @@ class Backtester:
                     f"{pnl_pct_sign}{trade['pnl_pct']:<7.2f}% "
                     f"{trade['duration_str']:<10}"
                 )
+        
+        # Print API status
+        print(f"\n{'='*70}")
+        print("API STATUS")
+        print(f"{'='*70}")
+        
+        # LLM API Status
+        llm_status = result.llm_api_status
+        print(f"\nLLM API:")
+        print(f"  Enabled: {llm_status['enabled']}")
+        print(f"  Enabled in Backtest: {llm_status['enabled_in_backtest']}")
+        if llm_status['enabled'] and llm_status['enabled_in_backtest']:
+            print(f"  Provider: {llm_status['provider']}")
+            print(f"  Model: {llm_status['model']}")
+            print(f"  Total Calls: {llm_status['total_calls']}")
+            print(f"  Max Calls per Backtest: {llm_status['max_calls_per_backtest']}")
+            if llm_status['calls_by_pair']:
+                print(f"  Calls by Pair:")
+                for pair, calls in llm_status['calls_by_pair'].items():
+                    print(f"    {pair}: {calls} calls")
+        else:
+            print(f"  Status: Not used in this backtest")
+        
+        # X API Status
+        x_status = result.x_api_status
+        print(f"\nX (Twitter) API:")
+        print(f"  Enabled: {x_status['enabled']}")
+        print(f"  Enabled in Backtest: {x_status['enabled_in_backtest']}")
+        if x_status['enabled']:
+            print(f"  Requests per Coin per Day: {x_status['requests_per_coin_per_day']}")
+            print(f"  Cache TTL: {x_status['cache_ttl_hours']} hours")
+            if x_status['enabled_in_backtest']:
+                print(f"  Max Calls per Backtest: {x_status['max_calls_per_backtest']}")
+            else:
+                print(f"  Status: Disabled in backtest mode")
+        else:
+            print(f"  Status: Not configured")
         
         print("="*70 + "\n")
 
