@@ -11,6 +11,8 @@ import json
 from ..data.data_storage import DataStorage
 from ..strategies.ensemble_strategy import EnsembleStrategy
 from ..execution.risk_manager import RiskManager
+from ..api.binance_client import BinanceClient
+from ..api.twitter_scraper import TwitterScraper
 from ..utils.config import load_config
 from ..utils.logger import setup_logger, get_logger
 from ..utils.performance import PerformanceTracker, TradeRecord
@@ -62,6 +64,7 @@ class BacktestResult:
     min_capital_per_trade: Optional[float]
     llm_api_status: Dict[str, Any]
     x_api_status: Dict[str, Any]
+    strategy_performance: Dict[str, Dict[str, Any]]
 
 
 class Backtester:
@@ -95,10 +98,53 @@ class Backtester:
             retention_days=365  # Keep more data for backtesting
         )
         
+        # Initialize Binance client for fetching historical data if enabled
+        self.binance_client = None
+        binance_settings = data_config.get('binance', {}) or {}
+        binance_enabled = binance_settings.get('enabled', False) or ('binance' in data_config.get('sources', []))
+        if binance_enabled:
+            self.binance_client = BinanceClient()
+            self.binance_interval = binance_settings.get('interval', '1h')
+        else:
+            self.binance_interval = '1h'
+        
+        # Initialize Twitter scraper for sentiment if enabled
+        self.twitter_scraper = None
+        self.social_mapping = {}
+        social_config = self.config.get('social', {}).get('x', {})
+        if social_config.get('enabled', False) and social_config.get('enable_in_backtest', False):
+            gemini_api_key = social_config.get('gemini_api_key')
+            if isinstance(gemini_api_key, str) and "${" not in gemini_api_key:
+                coin_accounts = social_config.get('coin_accounts', {})
+                self.social_mapping = social_config.get('pair_mapping', {})
+                if gemini_api_key and coin_accounts:
+                    try:
+                        self.twitter_scraper = TwitterScraper(
+                            gemini_api_key=gemini_api_key,
+                            coin_accounts=coin_accounts,
+                            requests_per_coin_per_day=social_config.get('requests_per_coin_per_day', 2),
+                            cache_ttl_hours=social_config.get('cache_ttl_hours', 12),
+                            cache_path=social_config.get('cache_path', 'data/social_cache.json'),
+                            max_results=social_config.get('max_results', 25),
+                            gemini_model=social_config.get('gemini_model', 'gemini-1.5-flash'),
+                        )
+                        self.logger.info("Twitter scraper with Gemini initialized for backtest")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to initialize Twitter scraper for backtest: {e}")
+        
         # Initialize strategy
         strategies_config = copy.deepcopy(self.config.get('strategies', {}))
         strategies_config['mode'] = 'backtest'
         self.strategy = EnsembleStrategy(strategies_config)
+        
+        # Track strategy performance
+        self.strategy_performance = {
+            'technical': {'trades': 0, 'pnl': 0.0, 'wins': 0, 'losses': 0},
+            'llm': {'trades': 0, 'pnl': 0.0, 'wins': 0, 'losses': 0},
+            'baseline': {'trades': 0, 'pnl': 0.0, 'wins': 0, 'losses': 0},
+            'oversold': {'trades': 0, 'pnl': 0.0, 'wins': 0, 'losses': 0},
+            'ensemble': {'trades': 0, 'pnl': 0.0, 'wins': 0, 'losses': 0}
+        }
         
         # Initialize risk manager
         trading_config = self.config.get('trading', {})
@@ -118,7 +164,127 @@ class Backtester:
         self.last_trade_time: Dict[str, int] = {}
         self.cooldown_period = trading_config.get('cooldown_period', 300) * 1000  # Convert to ms
         
+        
         self.logger.info(f"Backtester initialized with balance: ${initial_balance:,.2f}")
+    
+    def _convert_pair_to_binance(self, pair: str) -> Optional[str]:
+        """Convert Roostoo pair format to Binance symbol format."""
+        if '/' in pair:
+            base, quote = pair.split('/')
+            if quote == 'USD':
+                return f"{base}USDT"
+        return None
+    
+    def _resolve_social_key(self, pair: str) -> Optional[str]:
+        """Resolve trading pair to social sentiment key."""
+        if pair in self.social_mapping:
+            return self.social_mapping[pair]
+        if '/' in pair:
+            base, _ = pair.split('/')
+            return self.social_mapping.get(base, base)
+        return None
+    
+    def _convert_binance_klines_to_ticker_data(
+        self,
+        pair: str,
+        klines: List[List[Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert Binance klines to ticker data format.
+        
+        Binance kline format: [open_time, open, high, low, close, volume, close_time, ...]
+        Ticker data format: {timestamp, last_price, max_bid, min_ask, change, ...}
+        """
+        ticker_data = []
+        prev_close = None
+        
+        for kline in klines:
+            open_time = int(kline[0])  # Open time in milliseconds
+            close_time = int(kline[6])  # Close time in milliseconds
+            open_price = float(kline[1])
+            high_price = float(kline[2])
+            low_price = float(kline[3])
+            close_price = float(kline[4])
+            volume = float(kline[5])
+            
+            # Calculate change percentage
+            change = 0.0
+            if prev_close is not None and prev_close > 0:
+                change = ((close_price - prev_close) / prev_close) * 100
+            
+            # Use close time as timestamp, and close price as last_price
+            # Estimate bid/ask as close price ± small spread
+            spread = close_price * 0.001  # 0.1% spread
+            
+            ticker_data.append({
+                'pair': pair,
+                'timestamp': close_time,
+                'LastPrice': close_price,
+                'MaxBid': close_price - spread,
+                'MinAsk': close_price + spread,
+                'Change': change,
+                'CoinTradeValue': volume,
+                'UnitTradeValue': volume * close_price,
+                'high': high_price,
+                'low': low_price,
+                'open': open_price,
+                'last_price': close_price,  # Also include for compatibility
+                'max_bid': close_price - spread,
+                'min_ask': close_price + spread,
+                'change': change,
+                'volume': volume
+            })
+            
+            prev_close = close_price
+        
+        return ticker_data
+    
+    def _fetch_historical_data_from_binance(
+        self,
+        pair: str,
+        start_time: int,
+        end_time: int
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Fetch historical data from Binance and convert to ticker format."""
+        if not self.binance_client:
+            return None
+        
+        binance_symbol = self._convert_pair_to_binance(pair)
+        if not binance_symbol:
+            self.logger.warning(f"Cannot convert {pair} to Binance symbol format")
+            return None
+        
+        try:
+            self.logger.info(f"Fetching historical data from Binance for {pair} ({binance_symbol})...")
+            klines = self.binance_client.get_historical_klines(
+                symbol=binance_symbol,
+                start_time=start_time,
+                end_time=end_time,
+                interval=self.binance_interval
+            )
+            
+            if not klines:
+                self.logger.warning(f"No klines data from Binance for {pair}")
+                return None
+            
+            ticker_data = self._convert_binance_klines_to_ticker_data(pair, klines)
+            
+            # Store in database for future use
+            for data_point in ticker_data:
+                # Extract the ticker data dict (without pair and timestamp)
+                ticker_dict = {k: v for k, v in data_point.items() if k not in ['pair', 'timestamp']}
+                self.data_storage.store_ticker_data(
+                    pair=pair,
+                    ticker_data=ticker_dict,
+                    timestamp=data_point['timestamp']
+                )
+            
+            self.logger.info(f"Fetched and stored {len(ticker_data)} data points from Binance for {pair}")
+            return ticker_data
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching historical data from Binance for {pair}: {e}")
+            return None
     
     def load_historical_data(
         self,
@@ -128,6 +294,7 @@ class Backtester:
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Load historical data for specified pairs.
+        If data is missing from database, fetch from Binance if enabled.
         
         Args:
             pairs: List of trading pairs
@@ -140,6 +307,7 @@ class Backtester:
         historical_data = {}
         
         for pair in pairs:
+            # Try to load from database first
             data = self.data_storage.get_ticker_history(
                 pair=pair,
                 start_time=start_time,
@@ -148,6 +316,14 @@ class Backtester:
             
             # Sort by timestamp ascending
             data.sort(key=lambda x: x['timestamp'])
+            
+            # If no data and Binance is enabled, try fetching from Binance
+            if not data and self.binance_client and start_time and end_time:
+                self.logger.info(f"No local data for {pair}, attempting to fetch from Binance...")
+                data = self._fetch_historical_data_from_binance(pair, start_time, end_time)
+                if data:
+                    # Re-sort after fetching
+                    data.sort(key=lambda x: x['timestamp'])
             
             if data:
                 historical_data[pair] = data
@@ -187,7 +363,8 @@ class Backtester:
         side: str,
         quantity: float,
         price: float,
-        timestamp: int
+        timestamp: int,
+        strategy_metadata: Optional[Dict[str, Any]] = None
     ):
         """Open a new position."""
         cost = quantity * price
@@ -211,6 +388,9 @@ class Backtester:
             current_price=price
         )
         
+        # Store strategy metadata for performance tracking
+        position.strategy_metadata = strategy_metadata or {}
+        
         self.positions[pair] = position
         self.last_trade_time[pair] = timestamp
         
@@ -218,6 +398,34 @@ class Backtester:
         self.logger.info(f"Trade opened: {side} {quantity:.6f} {pair} @ ${price:.4f}")
         
         return True
+    
+    def _track_strategy_performance(self, strategy_metadata: Dict[str, Any], pnl: float):
+        """Track performance by strategy component."""
+        component_signals = strategy_metadata.get('component_signals', {})
+        is_win = pnl > 0
+        
+        # Track ensemble performance
+        self.strategy_performance['ensemble']['trades'] += 1
+        self.strategy_performance['ensemble']['pnl'] += pnl
+        if is_win:
+            self.strategy_performance['ensemble']['wins'] += 1
+        else:
+            self.strategy_performance['ensemble']['losses'] += 1
+        
+        # Track individual strategy contributions
+        for strategy_name, signal_info in component_signals.items():
+            if strategy_name in self.strategy_performance:
+                weight = signal_info.get('weight', 0)
+                # Only count if strategy had significant contribution (weight > 0.1)
+                if weight > 0.1:
+                    self.strategy_performance[strategy_name]['trades'] += 1
+                    # Allocate PnL proportionally by weight
+                    allocated_pnl = pnl * weight
+                    self.strategy_performance[strategy_name]['pnl'] += allocated_pnl
+                    if is_win:
+                        self.strategy_performance[strategy_name]['wins'] += 1
+                    else:
+                        self.strategy_performance[strategy_name]['losses'] += 1
     
     def _close_position(
         self,
@@ -267,7 +475,8 @@ class Backtester:
             'duration_str': duration_str,
             'entry_value': position.quantity * position.entry_price,
             'exit_value': position.quantity * price,
-            'capital_used': position.quantity * position.entry_price
+            'capital_used': position.quantity * position.entry_price,
+            'strategy_metadata': getattr(position, 'strategy_metadata', {})
         }
         
         self.closed_trades.append(trade_record)
@@ -348,6 +557,14 @@ class Backtester:
             end_time=end_timestamp
         )
         
+        # Log which pairs have data and which don't
+        pairs_with_data = list(historical_data.keys())
+        pairs_without_data = [p for p in pairs if p not in historical_data]
+        
+        self.logger.info(f"Pairs with data ({len(pairs_with_data)}): {pairs_with_data}")
+        if pairs_without_data:
+            self.logger.warning(f"Pairs without data ({len(pairs_without_data)}): {pairs_without_data}")
+        
         if not historical_data:
             self.logger.error("No historical data available for backtesting")
             raise ValueError("No historical data available")
@@ -390,18 +607,36 @@ class Backtester:
                         break
                 
                 if data_point:
-                    current_prices[pair] = data_point.get('last_price', 0)
+                    # Support both formats (database format and converted format)
+                    last_price = data_point.get('last_price') or data_point.get('LastPrice', 0)
+                    max_bid = data_point.get('max_bid') or data_point.get('MaxBid')
+                    min_ask = data_point.get('min_ask') or data_point.get('MinAsk')
+                    change = data_point.get('change') or data_point.get('Change', 0)
+                    
+                    current_prices[pair] = last_price
                     
                     # Format market data for strategy
                     market_data_by_pair[pair] = {
                         'pair': pair,
                         'roostoo': {
-                            'LastPrice': data_point.get('last_price'),
-                            'MaxBid': data_point.get('max_bid'),
-                            'MinAsk': data_point.get('min_ask'),
-                            'Change': data_point.get('change', 0)
-                        }
+                            'LastPrice': last_price,
+                            'MaxBid': max_bid or (last_price * 0.999),
+                            'MinAsk': min_ask or (last_price * 1.001),
+                            'Change': change
+                        },
+                        'social': {}
                     }
+                    
+                    # Add Twitter sentiment if scraper is available
+                    if self.twitter_scraper:
+                        coin_key = self._resolve_social_key(pair)
+                        if coin_key:
+                            try:
+                                sentiment = self.twitter_scraper.get_sentiment(coin_key)
+                                if sentiment:
+                                    market_data_by_pair[pair]['social']['x'] = sentiment
+                            except Exception as exc:
+                                self.logger.debug(f"Error fetching sentiment for {pair}: {exc}")
             
             # Update unrealized PnL
             self._update_positions(current_prices)
@@ -409,6 +644,9 @@ class Backtester:
             # Process each pair
             for pair in pairs:
                 if pair not in market_data_by_pair:
+                    # Log skipped pairs (first time only to avoid spam)
+                    if i == 0 and pair not in historical_data:
+                        self.logger.debug(f"Skipping {pair}: no data at timestamp {timestamp}")
                     continue
                 
                 market_data = market_data_by_pair[pair]
@@ -418,6 +656,10 @@ class Backtester:
                 
                 # Generate signal
                 signal = self.strategy.generate_signal(market_data)
+                
+                # Track strategy contributions
+                signal_metadata = signal.metadata or {}
+                component_signals = signal_metadata.get('component_signals', {})
                 
                 # Check if we should trade
                 if signal.confidence < self.min_confidence:
@@ -436,7 +678,10 @@ class Backtester:
                     
                     # Spot-only: SELL signal closes existing BUY position
                     if position.side == "BUY" and signal.action == "SELL":
-                        self._close_position(pair, current_price, timestamp)
+                        closed_pnl = self._close_position(pair, current_price, timestamp)
+                        # Track strategy performance for closed trade
+                        if closed_pnl is not None and hasattr(position, 'strategy_metadata'):
+                            self._track_strategy_performance(position.strategy_metadata, closed_pnl)
                 
                 # Open new position only on BUY signal (spot-only)
                 if signal.action == "BUY" and pair not in self.positions:
@@ -483,7 +728,8 @@ class Backtester:
                             side="BUY",
                             quantity=quantity,
                             price=current_price,
-                            timestamp=timestamp
+                            timestamp=timestamp,
+                            strategy_metadata=signal_metadata
                         )
             
             # Record balance history periodically
@@ -500,11 +746,16 @@ class Backtester:
         final_prices = {}
         for pair in pairs:
             if pair in historical_data and historical_data[pair]:
-                final_prices[pair] = historical_data[pair][-1].get('last_price', 0)
+                last_point = historical_data[pair][-1]
+                final_prices[pair] = last_point.get('last_price') or last_point.get('LastPrice', 0)
         
         for pair in list(self.positions.keys()):
             if pair in final_prices:
-                self._close_position(pair, final_prices[pair], sorted_timestamps[-1])
+                position = self.positions[pair]
+                closed_pnl = self._close_position(pair, final_prices[pair], sorted_timestamps[-1])
+                # Track strategy performance for final closed trades
+                if closed_pnl is not None and hasattr(position, 'strategy_metadata'):
+                    self._track_strategy_performance(position.strategy_metadata, closed_pnl)
         
         # Append final balance/equity snapshot after closing remaining positions
         if sorted_timestamps:
@@ -519,6 +770,20 @@ class Backtester:
         
         # Calculate results
         result = self._calculate_results(start_dt, end_dt)
+        
+        # Log summary of pairs processed
+        pairs_processed = set()
+        for trade in self.closed_trades:
+            pairs_processed.add(trade.get('pair'))
+        for pair in self.positions.keys():
+            pairs_processed.add(pair)
+        
+        pairs_with_trades = [p for p in pairs if p in pairs_processed]
+        pairs_without_trades = [p for p in pairs if p not in pairs_processed]
+        
+        self.logger.info(f"Pairs processed with trades: {pairs_with_trades}")
+        if pairs_without_trades:
+            self.logger.warning(f"Pairs configured but no trades: {pairs_without_trades}")
         
         self.logger.info(
             f"Backtest completed: "
@@ -608,8 +873,28 @@ class Backtester:
             'enabled_in_backtest': social_config.get('enable_in_backtest', False),
             'max_calls_per_backtest': social_config.get('max_calls_per_backtest', 1),
             'requests_per_coin_per_day': social_config.get('requests_per_coin_per_day', 2),
-            'cache_ttl_hours': social_config.get('cache_ttl_hours', 12)
+            'cache_ttl_hours': social_config.get('cache_ttl_hours', 12),
+            'gemini_model': social_config.get('gemini_model', 'gemini-1.5-flash')
         }
+        
+        # Calculate strategy performance metrics
+        strategy_perf = {}
+        for strategy_name, perf in self.strategy_performance.items():
+            trades = perf['trades']
+            if trades > 0:
+                win_rate = perf['wins'] / trades
+                avg_pnl = perf['pnl'] / trades
+            else:
+                win_rate = 0.0
+                avg_pnl = 0.0
+            strategy_perf[strategy_name] = {
+                'trades': trades,
+                'total_pnl': perf['pnl'],
+                'avg_pnl': avg_pnl,
+                'wins': perf['wins'],
+                'losses': perf['losses'],
+                'win_rate': win_rate
+            }
         
         return BacktestResult(
             start_date=start_date.isoformat(),
@@ -634,7 +919,8 @@ class Backtester:
             max_capital_per_trade=max_capital,
             min_capital_per_trade=min_capital,
             llm_api_status=llm_api_status,
-            x_api_status=x_api_status
+            x_api_status=x_api_status,
+            strategy_performance=strategy_perf
         )
     
     def save_report(self, result: BacktestResult, output_path: str = "data/backtest_report.json"):
@@ -712,6 +998,19 @@ class Backtester:
                     f"{trade['duration_str']:<10}"
                 )
         
+        # Print Strategy Performance Breakdown
+        print(f"\n{'='*70}")
+        print("STRATEGY PERFORMANCE BREAKDOWN")
+        print(f"{'='*70}")
+        for strategy_name, perf in result.strategy_performance.items():
+            if perf['trades'] > 0:
+                print(f"\n{strategy_name.upper()}:")
+                print(f"  Trades: {perf['trades']}")
+                print(f"  Total PnL: ${perf['total_pnl']:,.2f}")
+                print(f"  Avg PnL per Trade: ${perf['avg_pnl']:,.2f}")
+                print(f"  Win Rate: {perf['win_rate']:.2%}")
+                print(f"  Wins: {perf['wins']}, Losses: {perf['losses']}")
+        
         # Print API status
         print(f"\n{'='*70}")
         print("API STATUS")
@@ -734,12 +1033,13 @@ class Backtester:
         else:
             print(f"  Status: Not used in this backtest")
         
-        # X API Status
+        # X API Status (Twitter Scraper with Gemini)
         x_status = result.x_api_status
-        print(f"\nX (Twitter) API:")
+        print(f"\nX (Twitter) Scraper with Gemini:")
         print(f"  Enabled: {x_status['enabled']}")
         print(f"  Enabled in Backtest: {x_status['enabled_in_backtest']}")
         if x_status['enabled']:
+            print(f"  Gemini Model: {x_status.get('gemini_model', 'N/A')}")
             print(f"  Requests per Coin per Day: {x_status['requests_per_coin_per_day']}")
             print(f"  Cache TTL: {x_status['cache_ttl_hours']} hours")
             if x_status['enabled_in_backtest']:

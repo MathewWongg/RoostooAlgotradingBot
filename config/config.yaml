@@ -25,20 +25,16 @@ strategies:
     bb_std: 2
   
   llm:
-    provider: "openrouter"  # or "openai" / "anthropic"
-    model: "microsoft/mai-ds-r1:free"
+    provider: "gemini"  # Google Gemini API
+    model: "gemini-2.5-flash"  # or "gemini-2.5-pro" for more powerful model
     enabled: true  # Set to false to disable LLM strategy
     cache_responses: true
     max_tokens: 200
-    api_key: ${OPENROUTER_API_KEY}  # or ${OPENAI_API_KEY} / ${ANTHROPIC_API_KEY}
-    base_url: "https://openrouter.ai/api/v1"
-    default_headers:
-      HTTP-Referer: ${OPENROUTER_HTTP_REFERER}  # Replace with your app URL (required by OpenRouter)
-      X-Title: ${OPENROUTER_X_TITLE}            # Replace with your app name (required by OpenRouter)
+    api_key: ${GEMINI_API_KEY}  # Google Gemini API key
     trigger_confidence: 0.7       # Only call LLM when technical confidence exceeds this
     require_divergence: true      # Require technical/baseline divergence before calling LLM
-    max_calls_per_day: 2          # LLM call cap per coin per day (live trading)
-    max_calls_per_backtest: 1     # LLM call cap per coin per backtest
+    max_calls_per_day: 100000          # Effectively unlimited; LLM called per signal
+    max_calls_per_backtest: 100000     # Effectively unlimited; LLM called per signal
     enable_in_backtest: true      # Toggle LLM usage during backtests
     capital_multipliers:
       default: 1.0                # Base capital multiplier (starts at 1.0)
@@ -74,13 +70,13 @@ strategies:
     mean_reversion_weight: 0.4
 
 trading:
-  pairs: ["TRUMP/USD", "SHIB/USD", "DOGE/USD", "SOL/USD", "ETH/USD"]  # or "all" for all available pairs
-  pair_weights:  # Weighting for position allocation (2:8 ratio)
-    "TRUMP/USD": 70
-    "SHIB/USD": 60
-    "DOGE/USD": 70
-    "SOL/USD": 400
-    "ETH/USD": 400
+  pairs: ["TRUMP/USD", "SHIB/USD", "DOGE/USD", "SOL/USD", "ETH/USD"]  # All coins are traded
+  pair_weights:  # Weighting for position allocation (2:8 ratio: meme {doge, trump, shiba} : bigvol {eth, sol})
+    "TRUMP/USD": 2    # Meme coin - equal weight within meme category (meme total: 6 = 20%)
+    "SHIB/USD": 2     # Meme coin - equal weight within meme category
+    "DOGE/USD": 2     # Meme coin - equal weight within meme category
+    "SOL/USD": 12     # Bigvol coin - equal weight within bigvol category (bigvol total: 24 = 80%)
+    "ETH/USD": 12     # Bigvol coin - equal weight within bigvol category
   order_type: "MARKET"  # or "LIMIT"
   # Spot-only execution and risk knobs
   spot_only: true
@@ -113,19 +109,20 @@ data:
 social:
   x:
     enabled: true
-    bearer_token: ${X_BEARER_TOKEN}
-    requests_per_coin_per_day: 2  # Limit: 2 API calls per coin per day
+    gemini_api_key: ${GEMINI_API_KEY}
+    gemini_model: "gemini-1.5-flash"  # Free tier model
+    requests_per_coin_per_day: 2  # Limit: 2 scraping requests per coin per day
     cache_ttl_hours: 12           # Reuse cached sentiment for 12 hours
     max_results: 25               # Tweets per fetch (max 100)
     cache_path: "data/social_cache.json"
-    enable_in_backtest: false     # Skip X fetching during backtests
-    max_calls_per_backtest: 1     # Backtest fetch cap when enabled
-    coin_queries:
-      TRUMP: "(#TrumpCoin OR $TRUMP OR \"Trump\" (\"token\" OR \"coin\")) lang:en -is:retweet"
-      SHIB: "(#ShibaInu OR $SHIB OR #SHIBAINU) lang:en -is:retweet"
-      SOL: "(#Solana OR $SOL) lang:en -is:retweet"
-      ETH: "(#Ethereum OR $ETH) lang:en -is:retweet"
-      DOGE: "(#DogeCoin OR $DOGE) lang:en -is:retweet"
+    enable_in_backtest: true      # Enable Twitter scraping with Gemini sentiment in backtests
+    max_calls_per_backtest: 10    # Backtest fetch cap when enabled (increased for testing)
+    coin_accounts:  # Mapping of coin symbols to Twitter usernames (without @)
+      TRUMP: "realDonaldTrump"    # or "TrumpCoin" if a specific account exists
+      DOGE: "dogecoin"
+      ETH: "ethereum"
+      SOL: "solana"
+      SHIB: "Shibtoken"           # Shiba Inu official account
     pair_mapping:
       "TRUMP/USD": "TRUMP"
       "SHIB/USD": "SHIB"

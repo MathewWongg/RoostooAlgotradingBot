@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 from .api.roostoo_client import RoostooClient
 from .api.horus_client import HorusClient
 from .api.binance_client import BinanceClient
-from .api.x_client import XClient
+from .api.twitter_scraper import TwitterScraper
 from .data.data_collector import DataCollector
 from .data.data_storage import DataStorage
 from .strategies.ensemble_strategy import EnsembleStrategy
@@ -52,6 +52,8 @@ class TradingBot:
         if horus_config.get('enabled', False):
             self.horus_client = HorusClient(api_key=horus_config.get('api_key'))
         
+        # Initialize data storage and collector
+        data_config = self.config.get('data', {})
         sources = data_config.get('sources', [])
         binance_settings = data_config.get('binance', {}) or {}
         binance_enabled = binance_settings.get('enabled', False) or ('binance' in sources)
@@ -59,9 +61,6 @@ class TradingBot:
         self.binance_client = None
         if binance_enabled:
             self.binance_client = BinanceClient()
-        
-        # Initialize data storage and collector
-        data_config = self.config.get('data', {})
         self.data_storage = DataStorage(
             db_path=f"data/{data_config.get('storage', 'sqlite')}.db",
             retention_days=data_config.get('data_retention_days', 30)
@@ -71,29 +70,30 @@ class TradingBot:
         self.x_client = None
         self.social_mapping = {}
         if social_config.get('enabled', False):
-            bearer_token = social_config.get('bearer_token')
-            if isinstance(bearer_token, str) and "${" in bearer_token:
-                bearer_token = None
-            coin_queries = social_config.get('coin_queries', {})
+            gemini_api_key = social_config.get('gemini_api_key')
+            if isinstance(gemini_api_key, str) and "${" in gemini_api_key:
+                gemini_api_key = None
+            coin_accounts = social_config.get('coin_accounts', {})
             self.social_mapping = social_config.get('pair_mapping', {})
 
-            if bearer_token and coin_queries:
+            if gemini_api_key and coin_accounts:
                 try:
-                    self.x_client = XClient(
-                        bearer_token=bearer_token,
-                        coin_queries=coin_queries,
+                    self.x_client = TwitterScraper(
+                        gemini_api_key=gemini_api_key,
+                        coin_accounts=coin_accounts,
                         requests_per_coin_per_day=social_config.get('requests_per_coin_per_day', 2),
                         cache_ttl_hours=social_config.get('cache_ttl_hours', 12),
                         cache_path=social_config.get('cache_path', 'data/social_cache.json'),
                         max_results=social_config.get('max_results', 25),
+                        gemini_model=social_config.get('gemini_model', 'gemini-1.5-flash'),
                     )
-                    self.logger.info("X sentiment client initialized")
+                    self.logger.info("Twitter scraper with Gemini sentiment initialized")
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize X client: {e}")
+                    self.logger.error(f"Failed to initialize Twitter scraper: {e}")
                     self.x_client = None
             else:
                 self.logger.warning(
-                    "X sentiment enabled but bearer token or coin queries missing; disabling."
+                    "X sentiment enabled but Gemini API key or coin accounts missing; disabling."
                 )
 
         self.data_collector = DataCollector(

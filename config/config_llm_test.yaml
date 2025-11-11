@@ -1,0 +1,144 @@
+# Configuration for Testing LLM Strategy
+# Copy this to config.yaml or use: python run_backtest.py --config config/config_llm_test.yaml
+
+roostoo:
+  api_key: ${ROOSTOO_API_KEY}
+  secret_key: ${ROOSTOO_SECRET_KEY}
+  base_url: "https://mock-api.roostoo.com"
+
+horus:
+  enabled: false
+  api_key: ${HORUS_API_KEY}
+
+strategies:
+  ensemble:
+    technical_weight: 0.30   # Reduced to give LLM more influence
+    llm_weight: 0.40         # INCREASED from 0.23 to 0.40
+    baseline_weight: 0.20    # Reduced
+    oversold_weight: 0.10    # Reduced
+  
+  technical:
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bb_period: 20
+    bb_std: 2
+  
+  llm:
+    provider: "gemini"  # Google Gemini API
+    model: "gemini-2.5-flash"  # Fast and cost-efficient model
+    enabled: true
+    cache_responses: true
+    max_tokens: 200
+    api_key: ${GEMINI_API_KEY}  # Google Gemini API key
+    
+    # TESTING SETTINGS - More aggressive LLM participation
+    trigger_confidence: 0.5       # LOWERED from 0.7 to 0.5 (more opportunities)
+    require_divergence: false     # CHANGED from true to false (LLM always participates)
+    max_calls_per_day: 100000          # Normalized to per-signal calls (no practical limit)
+    max_calls_per_backtest: 100000     # Normalized to per-signal calls (no practical limit)
+    enable_in_backtest: true      # Keep LLM active during backtests
+    
+    capital_multipliers:
+      default: 1.0
+      per_signal_bonus: 0.15
+      divergence: 0.2
+      confidence: 0.25
+      llm_confirmed: 0.3
+      oversold_trigger: 0.35
+
+  oversold:
+    enabled: true
+    rsi_period: 14
+    rsi_threshold: 25
+    bb_period: 20
+    bb_std: 2.0
+    volume_ema_period: 20
+    sma_period: 200
+    community_threshold: 10000
+    base_confidence: 0.7
+    max_confidence: 0.92
+    capital_boost_multiplier: 1.35
+    community_membership:
+      TRUMP: 25000
+      SHIB: 400000
+      DOGE: 380000
+      SOL: 150000
+      ETH: 600000
+  
+  baseline:
+    momentum_window: 5
+    mean_reversion_threshold: 0.02
+    momentum_weight: 0.6
+    mean_reversion_weight: 0.4
+
+trading:
+  pairs: ["TRUMP/USD", "SOL/USD"]  # Limited to 2 pairs for focused testing
+  pair_weights:
+    "TRUMP/USD": 70
+    "SHIB/USD": 60
+    "DOGE/USD": 70
+    "SOL/USD": 400
+    "ETH/USD": 400
+  order_type: "MARKET"
+  spot_only: true
+  max_position_pct: 0.03
+  position_size_pct: 0.1
+  max_portfolio_exposure_pct: 0.30
+  max_concurrent_positions: 2
+  max_positions: 3
+  polling_interval: 60
+  min_confidence: 0.5  # Lowered to allow more trades
+  cooldown_period: 600
+  min_order_size: 1.0
+  max_order_size: null
+
+data:
+  sources: ["roostoo", "binance"]
+  storage: "sqlite"
+  data_retention_days: 30
+  binance:
+    enabled: true
+    interval: "1h"
+    limit: 200
+    cache_seconds: 300
+    rsi_period: 14
+    sma_period: 20
+
+social:
+  x:
+    enabled: false  # Disabled to focus on technical analysis only
+    bearer_token: ${X_BEARER_TOKEN}
+    requests_per_coin_per_day: 2
+    cache_ttl_hours: 12
+    max_results: 25
+    cache_path: "data/social_cache.json"
+    enable_in_backtest: false
+    max_calls_per_backtest: 1
+    coin_queries:
+      TRUMP: "(#TrumpCoin OR $TRUMP OR \"Trump\" (\"token\" OR \"coin\")) lang:en -is:retweet"
+      SHIB: "(#ShibaInu OR $SHIB OR #SHIBAINU) lang:en -is:retweet"
+      SOL: "(#Solana OR $SOL) lang:en -is:retweet"
+      ETH: "(#Ethereum OR $ETH) lang:en -is:retweet"
+      DOGE: "(#DogeCoin OR $DOGE) lang:en -is:retweet"
+    pair_mapping:
+      "TRUMP/USD": "TRUMP"
+      "SHIB/USD": "SHIB"
+      "SOL/USD": "SOL"
+      "ETH/USD": "ETH"
+      "DOGE/USD": "DOGE"
+
+backtest:
+  enabled: true
+  initial_balance: 50000.0
+  default_start_days: 10
+  output_file: "data/backtest_report_llm_test.json"
+
+logging:
+  level: "INFO"
+  file: "logs/bot.log"
+  max_size_mb: 100
+

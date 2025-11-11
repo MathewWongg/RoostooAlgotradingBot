@@ -17,8 +17,18 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
     Returns:
         Dictionary containing configuration
     """
-    # Load environment variables
-    load_dotenv()
+    # Load environment variables from config/.env or config/.e
+    config_dir = Path(config_path).parent
+    env_file = config_dir / '.env'
+    env_file_alt = config_dir / '.e'
+    
+    if env_file.exists():
+        load_dotenv(env_file)
+    elif env_file_alt.exists():
+        load_dotenv(env_file_alt)
+    else:
+        # Fallback to default .env search
+        load_dotenv()
     
     config_file = Path(config_path)
     if not config_file.exists():

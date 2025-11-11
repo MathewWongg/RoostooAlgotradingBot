@@ -8,7 +8,7 @@ import numpy as np
 from ..api.roostoo_client import RoostooClient
 from ..api.horus_client import HorusClient
 from ..api.binance_client import BinanceClient
-from ..api.x_client import XClient
+from ..api.twitter_scraper import TwitterScraper
 from .data_storage import DataStorage
 from ..utils.logger import get_logger
 
@@ -22,7 +22,7 @@ class DataCollector:
         data_storage: DataStorage,
         horus_client: Optional[HorusClient] = None,
         binance_client: Optional[BinanceClient] = None,
-        social_client: Optional[XClient] = None,
+        social_client: Optional[TwitterScraper] = None,
         social_mapping: Optional[Dict[str, str]] = None,
         binance_settings: Optional[Dict[str, Any]] = None,
     ):
