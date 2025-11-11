@@ -67,7 +67,7 @@ class TradingBot:
         )
 
         social_config = self.config.get('social', {}).get('x', {})
-        self.x_client = None
+        self.twitter_scraper = None
         self.social_mapping = {}
         if social_config.get('enabled', False):
             gemini_api_key = social_config.get('gemini_api_key')
@@ -78,7 +78,7 @@ class TradingBot:
 
             if gemini_api_key and coin_accounts:
                 try:
-                    self.x_client = TwitterScraper(
+                    self.twitter_scraper = TwitterScraper(
                         gemini_api_key=gemini_api_key,
                         coin_accounts=coin_accounts,
                         requests_per_coin_per_day=social_config.get('requests_per_coin_per_day', 2),
@@ -90,10 +90,10 @@ class TradingBot:
                     self.logger.info("Twitter scraper with Gemini sentiment initialized")
                 except Exception as e:
                     self.logger.error(f"Failed to initialize Twitter scraper: {e}")
-                    self.x_client = None
+                    self.twitter_scraper = None
             else:
                 self.logger.warning(
-                    "X sentiment enabled but Gemini API key or coin accounts missing; disabling."
+                    "Twitter sentiment enabled but Gemini API key or coin accounts missing; disabling."
                 )
 
         self.data_collector = DataCollector(
@@ -101,7 +101,7 @@ class TradingBot:
             data_storage=self.data_storage,
             horus_client=self.horus_client,
             binance_client=self.binance_client,
-            social_client=self.x_client,
+            social_client=self.twitter_scraper,
             social_mapping=self.social_mapping,
             binance_settings=binance_settings,
         )
